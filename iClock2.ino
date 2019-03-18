@@ -36,13 +36,16 @@
 #include <ESP8266mDNS.h>                // For WebServer
 #include <WiFiUdp.h>                    // For OTA
 #include <ArduinoOTA.h>                 //
-#include <OpenWeatherMap.h>
-#include <TimeLib.h>
-#include <Ticker.h>
+#include <OpenWeatherMap.h>             // external weather
+#include <TimeLib.h>                    // used for hours (I think)
+#include <Ticker.h>                     // Tickers to contol display and weather flags
+#include <ESP8266HTTPClient.h>          // local driven OTA updates
+#include <ESP8266httpUpdate.h>          //
+#include "ThingSpeak.h"                 // Simple interface now
 
 
-const char auth[] = "51165f4f92fa4c148bb43179b0347a9e";
-const char TSWriteApiKey[] = "HYLS5JETRUEOHTWB";  
+const char TSauth[] = "51165f4f92fa4c148bb43179b0347a9e";
+const char TSWriteApiKey[] = "KPNEEM5L2OT999MA";  
 const char nodeName[] = "iClock2";
 const char awakeString[] = "ko_house/sensor/iClock2/awake";
 const char connectString[] = "ko_house/sensor/iClock2/connect";
@@ -59,6 +62,8 @@ Ticker getOWM;
 Ticker displayTempTicker;
 bool getOWMNow = true;
 const int displayWeatherPin = 4;
+WiFiClient  tsClient;
+
 
 // Web variables  (switch from String the char*  and save space? )
 String displayText = "Enter text here";
@@ -77,7 +82,7 @@ timeval tv;
 struct timezone tz;
 timespec tp;
 time_t tnow;
-char timeBuf[40];
+char timeBuf[100];
 
 char bootTime[30];
 
@@ -106,7 +111,17 @@ bool displayWeatherButton() {
 //
 // OTA routines
 //
+WiFiClient OTAclient;
+
 void setupOTA() {
+  // The line below is optional. It can be used to blink the LED on the board during flashing
+  // The LED will be on during download of one buffer of data from the network. The LED will
+  // be off during writing that buffer to flash
+  // On a good connection the LED should flash regularly. On a bad connection the LED will be
+  // on much longer than it will be off. Other pins than LED_BUILTIN may be used. The second
+  // value is used to put the LED on. If the LED is on with HIGH, that value should be passed
+  ESPhttpUpdate.setLedPin(16, LOW);
+
   ArduinoOTA.setHostname(nodeName);
 
   ArduinoOTA.onStart([]() {
@@ -348,6 +363,11 @@ void webServerSetup() {
   {
     wServer.send(200, "text/html", setForm() );
   });
+  wServer.on("/admin", []()
+  {
+    wServer.send(200, "text/html", setAdmin() );
+  });
+  wServer.on("/msgAdmin", handle_msgAdmin);                          // And as regular external functions:
   wServer.on("/msg", handle_msg);                          // And as regular external functions:
   wServer.begin();                                         // Start the server
   printString( (char*)nodeName );
@@ -425,6 +445,12 @@ void setup() {
   setupOTA();
 
   Serial.println("------------------ Setup getOWM ---------------");
+  Serial.println("Current Conditions: ");
+  currentConditions();
+  Serial.println("One day forecast: ");
+  oneDayFcast();      
+
+  getOWMNow = false;
   getOWM.attach( 60, toggleOWM );
 
   // wait for settimeofday() to be called
@@ -434,7 +460,7 @@ void setup() {
     sprintf(printBuf, "T%d", x++);
     printString(printBuf);
     delay(500);
-    if ( x > 10 )             // This will eventually settle, this is quicker
+    if ( x > 20 )             // This will eventually settle, this is quicker
       ESP.reset();
   }
 
@@ -449,6 +475,10 @@ void setup() {
 
   // When pushed
   pinMode( displayWeatherPin, INPUT );
+
+  Serial.println("------------------ ThingSpeak ------------------");
+  ThingSpeak.begin(tsClient);  // Initialize ThingSpeak
+
 
   Serial.println("------------------ All Setup ------------------");
   printStringWithShift("iClock2       ", 50);
@@ -471,14 +501,15 @@ void loop()
   clock_gettime(0, &tp); // also supported by esp8266 code
   tnow = time(nullptr);
   struct tm * timeinfo;
-
   timeinfo = localtime (&tnow);
+
 
   // Check for a button press, display external weather in a blocking call
   if ( displayWeatherButton( ) ) {
     printStringWithShift( displayOutsideWeather( timeBuf ), 50 );
-    printStringWithShift( "    ", 50 );
-    printStringWithShift( displayOutsideWeather( timeBuf ), 50 );
+    printStringWithShift( "  ", 50 );
+    printStringWithShift( displayOutsideForecast( timeBuf ), 50 );
+//    printStringWithShift( "Today: 45/18 Clear   Tomorrow: 30/10 Snow", 50 );
     printStringWithShift( "         ", 50 );
   }
   
@@ -526,22 +557,37 @@ void loop()
       printString(timeBuf);
       printTempFlag = true;
       displayTempTicker.attach( 3, printTempCountDown );
-    }
-    //
-    //   Get the weather from OpenWeatherMap.org  (every minute?)
-    //
-    
-    if ( getOWMNow ) 
-    {
-      Serial.println("Current Conditions: ");
-//      setWeather();
-      currentConditions();
-      Serial.println("One day forecast: ");
-      oneDayFcast();      
 
-      getOWMNow = false;
-    }        
+      //
+      //   Push to ThingSpeak if we're NOT getting OWM
+      //
+      if ( !getOWMNow ) {
+        // Write to ThingSpeak. There are up to 8 fields in a channel, allowing you to store up to 8 different
+        // pieces of information in a channel.  Here, we write to field 1.
+        int x = ThingSpeak.writeField(77958, 1, timeBuf, TSWriteApiKey);
+        if(x == 200){
+          Serial.println("Channel update successful.");
+        }
+        else{
+          Serial.println("Problem updating channel. HTTP error code " + String(x));
+        }
+      }
+      //
+      //   Get the weather from OpenWeatherMap.org  (every minute?)
+      //
+      if ( getOWMNow ) 
+      {
+        Serial.println("Current Conditions: ");
+        currentConditions();
+        Serial.println("One day forecast: ");
+        oneDayFcast();      
+  
+        getOWMNow = false;
+      }
+    }
+    Serial.printf("heap size: %u\n", ESP.getFreeHeap());  
   }
+  
   // Service MQTT often, but after the timed work
   if (!client.connected()) {
     reconnect();
@@ -557,6 +603,7 @@ void loop()
     printStringWithShift( "   ", 50 );
   } else
     textOn = "time";
+
 }
 
 
@@ -781,6 +828,7 @@ void handle_msg()  {
 
   String msg = wServer.arg("msg");
   Serial.println(msg);
+
   String decodedMsg = msg;
   // Restore special characters that are misformed to %char by the client browser
   decodedMsg.replace("+", " ");
@@ -846,6 +894,10 @@ void handle_msg()  {
 
 String setForm( ) { 
   String form =                                             // String form to sent to the client-browser
+    "<!DOCTYPE html>"
+    "<html>"
+    "<body>"
+    "<title>iClock v2</title>"
     "<head> <meta name='viewport' content='width=device-width'></head>"
     "<center>"
       "<img src='http://www.olalde.org/Comp_TOL_Fam.png'><br>"
@@ -878,18 +930,79 @@ String setForm( ) {
         "</select><br>"
         "Set LED intensity (0-255)"
         "<input type='text' name='ledStrip_intensity' size=4 value=" + ledStrip_intensity + "><br>"
-        "<br><input type='submit' value='Submit'></form>"
+        "<br><input type='submit' name='Submit' value='Submit'>"
     "</center>"
-    "<br><br><br>"
-    "Last boot: " + String(bootTime);
-
+    "</body>"
+    "</html>"   ;
     return form;
 }  
 
 
+void handle_msgAdmin()  { 
+
+  String msg = wServer.arg("msgAdmin");
+  Serial.println(msg);
+
+  if ( wServer.arg("Update").equals("Update") ) {
+    Serial.println("Clicked Update");
+    wServer.send(200, "text/html", 
+      "<!DOCTYPE html><html><body><title>iClock v2</title><head><meta name='viewport' content='width=device-width'>\
+      <meta http-equiv='refresh' content='60; url=http://iclock2.local/'></head><center><h1>UPDATING!!</h1>\
+      <script>\
+        var timeleft = 60;\
+        var downloadTimer = setInterval(function(){\
+          document.getElementById('progressBar').value = 60 - timeleft;\
+          timeleft -= 1;\
+          if(timeleft <= 0)\
+            clearInterval(downloadTimer);\
+        }, 1000);\
+      </script>\
+      <progress value='0' max='60' id='progressBar'></progress>\
+      " );
+
+    t_httpUpdate_return ret = ESPhttpUpdate.update(OTAclient, "http://192.168.1.225/file.bin");
+    // Or:
+    //t_httpUpdate_return ret = ESPhttpUpdate.update(OTAclient, "server", 80, "file.bin");
+
+    switch (ret) {
+      case HTTP_UPDATE_FAILED:
+        Serial.printf("HTTP_UPDATE_FAILD Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
+        break;
+      case HTTP_UPDATE_NO_UPDATES:
+        Serial.println("HTTP_UPDATE_NO_UPDATES");
+        break;
+      case HTTP_UPDATE_OK:
+        Serial.println("HTTP_UPDATE_OK");
+        break;
+    }
+    
+    return;
+  }
+}
+
+
+String setAdmin( ) { 
+  String form =                                             // String form to sent to the client-browser
+    "<!DOCTYPE html>"
+    "<html>"
+    "<body>"
+    "<title>iClock v2 Admin</title>"
+    "<head> <meta name='viewport' content='width=device-width'></head>"
+    
+      "<form action='msgAdmin'><p>Select administrative options<br>"
+      "<br><br><br>"
+      "Last boot: " + String(bootTime) +
+      "<br><input type='submit' name='Update' value='Update'></form>"
+
+    "</body>"
+    "</html>";
+    return form;
+}
+
+
 String result;
 char current_temp[10];
-
+char HiLoConditions[100];
 
 String dateTime(String timestamp) {
   time_t ts = timestamp.toInt();
@@ -900,7 +1013,7 @@ String dateTime(String timestamp) {
 
 char* displayOutsideWeather( char* timeBuf) {
 
-  strcpy( timeBuf, "Outside " );
+  strcpy( timeBuf, "Now: " );
   strcat( timeBuf, current_temp );
   return timeBuf;
 }
@@ -917,15 +1030,31 @@ void currentConditions(void) {
   Serial.print( "current_temp:" ); Serial.print( current_temp ); Serial.println( "*" );
 }
 
-#define OWMDays 2
+char* displayOutsideForecast( char* timeBuf) {
+
+//  strcpy( timeBuf, "Now: " );
+//  strcat( timeBuf, current_temp );
+  strcpy( timeBuf, HiLoConditions );
+  return timeBuf;
+}
+
+#define OWMDays 7
 void oneDayFcast(void) {
+  OWM_oneLocation *location   = new OWM_oneLocation;
   OWM_oneForecast *ow_fcast1 = new OWM_oneForecast[OWMDays];
-  byte entries = owF1.updateForecast(ow_fcast1, OWMDays, ow_key, "us", "McMurray", "imperial");
+  byte entries = owF1.updateForecast(location, ow_fcast1, OWMDays, ow_key, "us", "McMurray", "imperial");
   Serial.print("Entries: "); Serial.println(entries+1);
-  for (byte i = 0; i <= entries; ++i) { 
+  for (byte i = 0; i < 2; i++) {    // Only copy two rows, today and tomorrow
     Serial.print(dateTime(ow_fcast1[i].dt) + ": icon: ");
     Serial.print(ow_fcast1[i].icon + ", temp.: [" + ow_fcast1[i].t_min + ", " + ow_fcast1[i].t_max + "], press.: " + ow_fcast1[i].pressure);
-    Serial.println(", descr.: " + ow_fcast1[i].description + ":: " + ow_fcast1[i].cond + " " + ow_fcast1[i].cond_value);
+    Serial.println(", descr.: " + ow_fcast1[i].description + ":: " + ow_fcast1[i].main);
+    if ( i==0 ) {    // Today's forecast
+      strcpy( HiLoConditions, "  Today: "); 
+    } else {
+      strcat( HiLoConditions, "  Tomorrow: "); 
+    }
+    strcat( HiLoConditions, ow_fcast1[i].t_max.c_str() ); strcat( HiLoConditions, "/" ); strcat( HiLoConditions, ow_fcast1[i].t_min.c_str() );
+    strcat( HiLoConditions, " "); strcat( HiLoConditions, ow_fcast1[i].main.c_str() );
   }
   delete[] ow_fcast1;
 }
