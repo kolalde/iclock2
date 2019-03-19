@@ -1,12 +1,4 @@
 /*
- * Example that shows how to use RTC & NTP with a TZ timezone string.
- *
- * Recommended use:
- *  Bring up Serial monitor at 115200 *before* uploading
- *  Upload code and observe results
- *
- * Code is realeased to the public domain
- * 2018-11-03  Bill Perry
  *
  * GPIO Pins Used
  * 0    WS2812
@@ -332,14 +324,14 @@ void printAddress(DeviceAddress deviceAddress)
 }
 
 // function to print the temperature for a device
-void printTemperature(DeviceAddress deviceAddress, char* buff)
+void getTemperature(DeviceAddress deviceAddress, char* buff)
 {
-  float tempC = sensors.getTempC(deviceAddress);
-  Serial.print("Temp C: ");
-  Serial.print(tempC);
-  Serial.print(" Temp F: ");
+  float tempC = round( sensors.getTempC(deviceAddress) );
+  Serial.print( F("Temp C: ") );
+  Serial.print( tempC );
+  Serial.print( F(" Temp F: ") );
   Serial.println(DallasTemperature::toFahrenheit(tempC)); // Converts tempC to Fahrenheit
-  buff =  ftoa(buff, DallasTemperature::toFahrenheit(tempC), 1);
+  buff =  ftoa(buff, round(DallasTemperature::toFahrenheit(tempC)), 0);
 }
 
 ////////////////////////////////////////////////////////
@@ -507,9 +499,7 @@ void loop()
   // Check for a button press, display external weather in a blocking call
   if ( displayWeatherButton( ) ) {
     printStringWithShift( displayOutsideWeather( timeBuf ), 50 );
-    printStringWithShift( "  ", 50 );
     printStringWithShift( displayOutsideForecast( timeBuf ), 50 );
-//    printStringWithShift( "Today: 45/18 Clear   Tomorrow: 30/10 Snow", 50 );
     printStringWithShift( "         ", 50 );
   }
   
@@ -547,13 +537,14 @@ void loop()
     //
     if ( tv.tv_sec % tempPubInterval == 0 ) 
     {
-      Serial.println("Requesting temperatures...");
+      Serial.println(F("Requesting temperatures..."));
       sensors.requestTemperatures(); // Send the command to get temperatures
-      Serial.println("DONE");
+      Serial.println(F("DONE"));
       
       // It responds almost immediately. Let's print out the data
-      printTemperature( insideThermometer, timeBuf ); // Use a simple function to print out the data
+      getTemperature( insideThermometer, timeBuf ); // Use a simple function to print out the data
       client.publish(tempTopic, timeBuf);
+      strcat( timeBuf, "^F" );
       printString(timeBuf);
       printTempFlag = true;
       displayTempTicker.attach( 3, printTempCountDown );
@@ -571,18 +562,15 @@ void loop()
         else{
           Serial.println("Problem updating channel. HTTP error code " + String(x));
         }
-      }
-      //
-      //   Get the weather from OpenWeatherMap.org  (every minute?)
-      //
-      if ( getOWMNow ) 
-      {
-        Serial.println("Current Conditions: ");
-        currentConditions();
-        Serial.println("One day forecast: ");
-        oneDayFcast();      
-  
-        getOWMNow = false;
+      } else {
+        //
+        //   Get the weather from OpenWeatherMap.org  (every minute?)
+        //
+          Serial.println("Current Conditions: ");
+          currentConditions();
+          Serial.println("One day forecast: ");
+          oneDayFcast();          
+          getOWMNow = false;
       }
     }
     Serial.printf("heap size: %u\n", ESP.getFreeHeap());  
@@ -1025,7 +1013,9 @@ void currentConditions(void) {
   Serial.print("<" + ow_cond->longtitude + " " + ow_cond->latitude + "> @" + dateTime(ow_cond->dt) + ": ");
   Serial.println("icon: " + ow_cond->icon + ", " + " temp.: " + ow_cond->temp + ", press.: " + ow_cond->pressure + 
                 ", desc.: " + ow_cond->description);
+  ow_cond->temp.remove(ow_cond->temp.indexOf('.'));
   strcpy( current_temp, ow_cond->temp.c_str() );
+  //strcpy( current_temp, ow_cond->temp.c_str() );
   delete ow_cond;
   Serial.print( "current_temp:" ); Serial.print( current_temp ); Serial.println( "*" );
 }
@@ -1053,10 +1043,12 @@ void oneDayFcast(void) {
     } else {
       strcat( HiLoConditions, "  Tomorrow: "); 
     }
+    ow_fcast1[i].t_max.remove(ow_fcast1[i].t_max.indexOf('.')); ow_fcast1[i].t_min.remove(ow_fcast1[i].t_min.indexOf('.'));
     strcat( HiLoConditions, ow_fcast1[i].t_max.c_str() ); strcat( HiLoConditions, "/" ); strcat( HiLoConditions, ow_fcast1[i].t_min.c_str() );
     strcat( HiLoConditions, " "); strcat( HiLoConditions, ow_fcast1[i].main.c_str() );
   }
   delete[] ow_fcast1;
+  delete location;
 }
 void fiveDayFcast(void) {
   OWM_fiveForecast *ow_fcast5 = new OWM_fiveForecast[40];
