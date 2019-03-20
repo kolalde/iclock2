@@ -162,7 +162,7 @@ const int my_data = 13;    // DIN pin of MAX7219 module
 const int my_load = 12;    // CS pin of MAX7219 module
 const int my_clock = 14;  // CLK pin of MAX7219 module
 
-const int maxInUse = 2;    //change this variable to set how many MAX7219's you'll use
+const int maxInUse = 4;    //change this variable to set how many MAX7219's you'll use
 MaxMatrix m(my_data, my_load, my_clock, maxInUse); // define module
 
 
@@ -189,13 +189,15 @@ CRGB leds[NUM_LEDS];
 // Initial wifi setup, portal
 void setupWifi() {
   // turn on WIFI using stored SSID/PWD or captive portal
-  printString("WiFi Init");
+  printString("WiFi");
   WiFiManager wifiManager;
   wifiManager.autoConnect( nodeName );
   Serial.println("\nWiFi connected");
   Serial.print("Connected: "); Serial.println(WiFi.SSID());    
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
+  printStringWithShift( (char*)WiFi.SSID().c_str(), 50 );
+  printStringWithShift( (char*)F("       "), 50 );
 }
 
 
@@ -348,7 +350,6 @@ void webServerSetup() {
   }
   Serial.println("mDNS responder started");
   printString("mDNS");
-  //delay(2000);
 
   // Set up the endpoints for HTTP server,  Endpoints can be written as inline functions:
   wServer.on("/", []()
@@ -362,9 +363,9 @@ void webServerSetup() {
   wServer.on("/msgAdmin", handle_msgAdmin);                          // And as regular external functions:
   wServer.on("/msg", handle_msg);                          // And as regular external functions:
   wServer.begin();                                         // Start the server
-  printString( (char*)nodeName );
   // Add service to MDNS-SD
   MDNS.addService("http", "tcp", 80);
+  delay(200);
 }  
 
 
@@ -393,15 +394,17 @@ void setup() {
 
   Serial.println("------------------ Init MQTT --------------------");
   //setupMQTT();
+  printString( (char*) F("MQTT") );
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
   reconnect();
   client.publish(awakeString, "awake");
+  delay( 200 );
   
   Serial.println("------------ Init NTP, TZ, and DST -------------");
   // set function to call when time is set
   // is called by NTP code when NTP is used
-  printString( "TOD Init" );   
+  printString( (char*) F("Time") );
   settimeofday_cb(time_is_set);
 
   time_t rtc_time_t = 1541267183;         // fake RTC time for now and TZ
@@ -416,28 +419,35 @@ void setup() {
   // set both timezone offet and dst parameters to zero 
   // and get real timezone & DST support by using a TZ string
   configTime(0, 0, "pool.ntp.org");
-
+  delay( 200 );
 
   Serial.println("--------------- Init and DS1820 ----------------");
   // Check for and get indoor temp, DS1820
-  printString("Temperature");
+  printString( (char*) F("Temp") );
   sensors.begin();
   if (!sensors.getAddress(insideThermometer, 0))
   {
-    printString("No Temp!");
+    printString( (char*) F("No Temp!") );
     Serial.println("Unable to find address for Device 0"); 
     //ESP.reset();
   }
+  delay( 200 );
   
   Serial.println("------------------ WebServer ------------------");
-  printString("Web Server");
+  printString( (char*) F("HTTP") );
+  delay( 200 );
   webServerSetup();
   
   Serial.println("--------------------- OTA ---------------------");
+  printString( (char*) F("OTA") );
+  delay( 200 );
   setupOTA();
 
   Serial.println("------------------ Setup getOWM ---------------");
   Serial.println("Current Conditions: ");
+  
+  printString( (char*) F("OWM") );
+  delay( 200 );
   currentConditions();
   Serial.println("One day forecast: ");
   oneDayFcast();      
@@ -456,7 +466,7 @@ void setup() {
       ESP.reset();
   }
 
-  // Grab and thatsh the bootTime   what's really needed here?
+  // Grab and stash the bootTime   what's really needed here?
   gettimeofday(&tv, &tz);
   clock_gettime(0, &tp); // also supported by esp8266 code
   tnow = time(nullptr);
@@ -474,6 +484,7 @@ void setup() {
 
   Serial.println("------------------ All Setup ------------------");
   printStringWithShift("iClock2       ", 50);
+  delay(200);
 }
 
 
@@ -517,7 +528,10 @@ void loop()
 
     // Usually display the time, every tempPubInterval display the temp for 3s 
     if  ( !printTempFlag ) {
-      strftime (timeBuf,10,"%S",timeinfo);
+      //sprintf( timeBuf, "%2d:%02d:%02d", hourFormat12(), minute(), second() );
+      strftime (timeBuf,10,"%I:%M:%S",timeinfo);
+      if ( *timeBuf == '0' ) 
+        strcpy( timeBuf, timeBuf+1);
       Serial.println(timeBuf);
       printString(timeBuf);
     }
@@ -1001,7 +1015,7 @@ String dateTime(String timestamp) {
 
 char* displayOutsideWeather( char* timeBuf) {
 
-  strcpy( timeBuf, "Now: " );
+  strcpy( timeBuf, "      Now: " );
   strcat( timeBuf, current_temp );
   return timeBuf;
 }
@@ -1015,7 +1029,7 @@ void currentConditions(void) {
                 ", desc.: " + ow_cond->description);
   ow_cond->temp.remove(ow_cond->temp.indexOf('.'));
   strcpy( current_temp, ow_cond->temp.c_str() );
-  //strcpy( current_temp, ow_cond->temp.c_str() );
+
   delete ow_cond;
   Serial.print( "current_temp:" ); Serial.print( current_temp ); Serial.println( "*" );
 }
@@ -1039,9 +1053,9 @@ void oneDayFcast(void) {
     Serial.print(ow_fcast1[i].icon + ", temp.: [" + ow_fcast1[i].t_min + ", " + ow_fcast1[i].t_max + "], press.: " + ow_fcast1[i].pressure);
     Serial.println(", descr.: " + ow_fcast1[i].description + ":: " + ow_fcast1[i].main);
     if ( i==0 ) {    // Today's forecast
-      strcpy( HiLoConditions, "  Today: "); 
+      strcpy( HiLoConditions, "   Today: "); 
     } else {
-      strcat( HiLoConditions, "  Tomorrow: "); 
+      strcat( HiLoConditions, "   Tomorrow: "); 
     }
     ow_fcast1[i].t_max.remove(ow_fcast1[i].t_max.indexOf('.')); ow_fcast1[i].t_min.remove(ow_fcast1[i].t_min.indexOf('.'));
     strcat( HiLoConditions, ow_fcast1[i].t_max.c_str() ); strcat( HiLoConditions, "/" ); strcat( HiLoConditions, ow_fcast1[i].t_min.c_str() );
