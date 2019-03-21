@@ -53,7 +53,7 @@ OWMoneForecast    owF1;
 Ticker getOWM;
 Ticker displayTempTicker;
 bool getOWMNow = true;
-const int displayWeatherPin = 4;
+const int displayWeatherPin = 0;
 WiFiClient  tsClient;
 
 
@@ -93,9 +93,9 @@ bool displayWeatherButton() {
 
   buttonState = digitalRead(displayWeatherPin);
   if (buttonState == HIGH) {
-    return true;
-  } else {
     return false;
+  } else {
+    return true;
   }
 }
 
@@ -112,7 +112,7 @@ void setupOTA() {
   // On a good connection the LED should flash regularly. On a bad connection the LED will be
   // on much longer than it will be off. Other pins than LED_BUILTIN may be used. The second
   // value is used to put the LED on. If the LED is on with HIGH, that value should be passed
-  ESPhttpUpdate.setLedPin(16, LOW);
+  ESPhttpUpdate.setLedPin(15, HIGH);
 
   ArduinoOTA.setHostname(nodeName);
 
@@ -531,7 +531,7 @@ void loop()
       //sprintf( timeBuf, "%2d:%02d:%02d", hourFormat12(), minute(), second() );
       strftime (timeBuf,10,"%I:%M:%S",timeinfo);
       if ( *timeBuf == '0' ) 
-        strcpy( timeBuf, timeBuf+1);
+        *timeBuf = ' ';         // replace leading 0 with a space
       Serial.println(timeBuf);
       printString(timeBuf);
     }
