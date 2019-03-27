@@ -18,7 +18,8 @@
 #include <ESP8266WiFi.h>                // in general
 #include <sys/time.h>                   // struct timeval
 #include <coredecls.h>                  // settimeofday_cb()
-#include <MaxMatrix.h>                  // MAX7912
+#include <MD_MAX72xx.h>                 // MAX7912
+#include <SPI.h>
 #include <pgmspace.h>                   // strings in flash to save on ram
 #include <WiFiManager.h>                // captive portal for WiFi setup
 #include <FastLED.h>                    // controlling WS2812s
@@ -158,12 +159,26 @@ void setupOTA() {
 //
 // LedMatrix defines for MAX7912s
 //
-const int my_data = 13;    // DIN pin of MAX7219 module
-const int my_load = 12;    // CS pin of MAX7219 module
-const int my_clock = 14;  // CLK pin of MAX7219 module
+// Turn on debug statements to the serial output
+#define  DEBUG  1
+#if  DEBUG
+#define PRINT(s, x) { Serial.print(F(s)); Serial.print(x); }
+#define PRINTS(x) Serial.print(F(x))
+#define PRINTD(x) Serial.println(x, DEC)
+#else
+#define PRINT(s, x)
+#define PRINTS(x)
+#define PRINTD(x)
+#endif
 
-const int maxInUse = 4;    //change this variable to set how many MAX7219's you'll use
-MaxMatrix m(my_data, my_load, my_clock, maxInUse); // define module
+#define HARDWARE_TYPE MD_MAX72XX::GENERIC_HW
+#define MAX_DEVICES 4
+
+#define CLK_PIN   14  // or SCK
+#define DATA_PIN  13  // or MOSI
+#define CS_PIN    12  // or SS
+// SPI hardware interface
+MD_MAX72XX mx = MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
 
 
 ////////////////////////////////////////////////////////
@@ -382,8 +397,7 @@ void setup() {
   Serial.println( compile_date );
   
   Serial.println("---------- Init and clear the MAX7912 -----------");
-  m.init(); // module initialize
-  m.setIntensity(0); // dot matix intensity 0-15
+  initMDLib();
   
   Serial.println("----------- Init and clear the WS2812s ----------");
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection( TypicalLEDStrip );
@@ -499,7 +513,6 @@ void setup() {
 ////////////////////////////////////////////////////////
 void loop()
 {
-
   gettimeofday(&tv, &tz);
   clock_gettime(0, &tp); // also supported by esp8266 code
   tnow = time(nullptr);
@@ -541,9 +554,9 @@ void loop()
     //
     if ( strcmp(auto_brightness, "On") == 0 ) {
       if ( isLight() ) 
-        m.setIntensity(15);
+        mx.control(MD_MAX72XX::INTENSITY, 15);
       else
-        m.setIntensity(0);
+        mx.control(MD_MAX72XX::INTENSITY, 0);
     }
 
     //
@@ -610,172 +623,366 @@ void loop()
 
 
 
-
-
-
-/*
-################################################################################
-# File Name:             MAX7219_5.ino                                             
-# Board:                 Arduino UNO         
-# Programming Language:   Wiring / C /Processing /Fritzing / Arduino IDE          
-#           
-# Objective:             Scrolling LED dot Matrix
-#                     
-# Operation:           Scrolls a message over a 16x8 LED dot matrix
-#     
-# Author:                Marcelo Moraes 
-# Date:                  July 9th, 2013 
-# Place:                 Sorocaba - SP - Brazil 
-#         
-################################################################################
- 
- This code is a public example.
- */
-
-//******************************************************************************
-// visit this web page for further information about MaxMatrix library
-// https://code.google.com/p/arudino-maxmatrix-library/
-//******************************************************************************
-
-
-PROGMEM const char CH[] = {
-3, 8, B00000000, B00000000, B00000000, B00000000, B00000000, // space
-1, 8, B01011111, B00000000, B00000000, B00000000, B00000000, // !
-3, 8, B00000011, B00000000, B00000011, B00000000, B00000000, // "
-5, 8, B00010100, B00111110, B00010100, B00111110, B00010100, // #
-4, 8, B00100100, B01101010, B00101011, B00010010, B00000000, // $
-5, 8, B01100011, B00010011, B00001000, B01100100, B01100011, // %
-5, 8, B00110110, B01001001, B01010110, B00100000, B01010000, // &
-1, 8, B00000011, B00000000, B00000000, B00000000, B00000000, // '
-3, 8, B00011100, B00100010, B01000001, B00000000, B00000000, // (
-3, 8, B01000001, B00100010, B00011100, B00000000, B00000000, // )
-5, 8, B00101000, B00011000, B00001110, B00011000, B00101000, // *
-5, 8, B00001000, B00001000, B00111110, B00001000, B00001000, // +
-2, 8, B10110000, B01110000, B00000000, B00000000, B00000000, // ,
-4, 8, B00001000, B00001000, B00001000, B00001000, B00000000, // -
-2, 8, B01100000, B01100000, B00000000, B00000000, B00000000, // .
-4, 8, B01100000, B00011000, B00000110, B00000001, B00000000, // /
-4, 8, B00111110, B01000001, B01000001, B00111110, B00000000, // 0
-3, 8, B01000010, B01111111, B01000000, B00000000, B00000000, // 1
-4, 8, B01100010, B01010001, B01001001, B01000110, B00000000, // 2
-//3, 8, B01100010, B01010001, B01001110, B01000110, B00000000, // 2      sucky 3 bit version
-4, 8, B00100010, B01000001, B01001001, B00110110, B00000000, // 3
-4, 8, B00011000, B00010100, B00010010, B01111111, B00000000, // 4
-4, 8, B00100111, B01000101, B01000101, B00111001, B00000000, // 5
-4, 8, B00111110, B01001001, B01001001, B00110000, B00000000, // 6
-4, 8, B01100001, B00010001, B00001001, B00000111, B00000000, // 7
-4, 8, B00110110, B01001001, B01001001, B00110110, B00000000, // 8
-4, 8, B00000110, B01001001, B01001001, B00111110, B00000000, // 9
-1, 8, B00101000, B00000000, B00000000, B00000000, B00000000, // :
-1, 8, B10000000, B01010000, B00000000, B00000000, B00000000, // ;
-3, 8, B00010000, B00101000, B01000100, B00000000, B00000000, // <
-3, 8, B00010100, B00010100, B00010100, B00000000, B00000000, // =
-3, 8, B01000100, B00101000, B00010000, B00000000, B00000000, // >
-4, 8, B00000010, B01011001, B00001001, B00000110, B00000000, // ?
-5, 8, B00111110, B01001001, B01010101, B01011101, B00001110, // @
-4, 8, B01111110, B00010001, B00010001, B01111110, B00000000, // A
-4, 8, B01111111, B01001001, B01001001, B00110110, B00000000, // B
-4, 8, B00111110, B01000001, B01000001, B00100010, B00000000, // C
-4, 8, B01111111, B01000001, B01000001, B00111110, B00000000, // D
-4, 8, B01111111, B01001001, B01001001, B01000001, B00000000, // E
-4, 8, B01111111, B00001001, B00001001, B00000001, B00000000, // F
-4, 8, B00111110, B01000001, B01001001, B01111010, B00000000, // G
-4, 8, B01111111, B00001000, B00001000, B01111111, B00000000, // H
-3, 8, B01000001, B01111111, B01000001, B00000000, B00000000, // I
-4, 8, B00110000, B01000000, B01000001, B00111111, B00000000, // J
-4, 8, B01111111, B00001000, B00010100, B01100011, B00000000, // K
-4, 8, B01111111, B01000000, B01000000, B01000000, B00000000, // L
-5, 8, B01111111, B00000010, B00001100, B00000010, B01111111, // M
-5, 8, B01111111, B00000100, B00001000, B00010000, B01111111, // N
-4, 8, B00111110, B01000001, B01000001, B00111110, B00000000, // O
-4, 8, B01111111, B00001001, B00001001, B00000110, B00000000, // P
-4, 8, B00111110, B01000001, B01000001, B10111110, B00000000, // Q
-4, 8, B01111111, B00001001, B00001001, B01110110, B00000000, // R
-4, 8, B01000110, B01001001, B01001001, B00110010, B00000000, // S
-5, 8, B00000001, B00000001, B01111111, B00000001, B00000001, // T
-4, 8, B00111111, B01000000, B01000000, B00111111, B00000000, // U
-5, 8, B00001111, B00110000, B01000000, B00110000, B00001111, // V
-5, 8, B00111111, B01000000, B00111000, B01000000, B00111111, // W
-5, 8, B01100011, B00010100, B00001000, B00010100, B01100011, // X
-5, 8, B00000111, B00001000, B01110000, B00001000, B00000111, // Y
-4, 8, B01100001, B01010001, B01001001, B01000111, B00000000, // Z
-2, 8, B01111111, B01000001, B00000000, B00000000, B00000000, // [
-4, 8, B00000001, B00000110, B00011000, B01100000, B00000000, // \ backslash
-2, 8, B01000001, B01111111, B00000000, B00000000, B00000000, // ]
-3, 8, B00000010, B00000101, B00000010, B00000000, B00000000,// degree symbol
-//3, 8, B00000010, B00000001, B00000010, B00000000, B00000000, // hat
-4, 8, B01000000, B01000000, B01000000, B01000000, B00000000, // _
-2, 8, B00000001, B00000010, B00000000, B00000000, B00000000, // `
-4, 8, B00100000, B01010100, B01010100, B01111000, B00000000, // a
-4, 8, B01111111, B01000100, B01000100, B00111000, B00000000, // b
-4, 8, B00111000, B01000100, B01000100, B00101000, B00000000, // c
-4, 8, B00111000, B01000100, B01000100, B01111111, B00000000, // d
-4, 8, B00111000, B01010100, B01010100, B00011000, B00000000, // e
-3, 8, B00000100, B01111110, B00000101, B00000000, B00000000, // f
-4, 8, B10011000, B10100100, B10100100, B01111000, B00000000, // g
-4, 8, B01111111, B00000100, B00000100, B01111000, B00000000, // h
-3, 8, B01000100, B01111101, B01000000, B00000000, B00000000, // i
-4, 8, B01000000, B10000000, B10000100, B01111101, B00000000, // j
-4, 8, B01111111, B00010000, B00101000, B01000100, B00000000, // k
-3, 8, B01000001, B01111111, B01000000, B00000000, B00000000, // l
-5, 8, B01111100, B00000100, B01111100, B00000100, B01111000, // m
-4, 8, B01111100, B00000100, B00000100, B01111000, B00000000, // n
-4, 8, B00111000, B01000100, B01000100, B00111000, B00000000, // o
-4, 8, B11111100, B00100100, B00100100, B00011000, B00000000, // p
-4, 8, B00011000, B00100100, B00100100, B11111100, B00000000, // q
-4, 8, B01111100, B00001000, B00000100, B00000100, B00000000, // r
-4, 8, B01001000, B01010100, B01010100, B00100100, B00000000, // s
-3, 8, B00000100, B00111111, B01000100, B00000000, B00000000, // t
-4, 8, B00111100, B01000000, B01000000, B01111100, B00000000, // u
-5, 8, B00011100, B00100000, B01000000, B00100000, B00011100, // v
-5, 8, B00111100, B01000000, B00111100, B01000000, B00111100, // w
-5, 8, B01000100, B00101000, B00010000, B00101000, B01000100, // x
-4, 8, B10011100, B10100000, B10100000, B01111100, B00000000, // y
-3, 8, B01100100, B01010100, B01001100, B00000000, B00000000, // z
-3, 8, B00001000, B00110110, B01000001, B00000000, B00000000, // {
-1, 8, B01111111, B00000000, B00000000, B00000000, B00000000, // |
-3, 8, B01000001, B00110110, B00001000, B00000000, B00000000, // }
-4, 8, B00001000, B00000100, B00001000, B00000100, B00000000, // ~
+const uint8_t PROGMEM _sys_var_single[] = 
+{
+'F', 1, 1, 255, 8,
+  5,0x3e,0x5b,0x4f,0x5b,0x3e, // 1 - 'Sad Smiley'
+  5,0x3e,0x6b,0x4f,0x6b,0x3e, // 2 - 'Happy Smiley'
+  5,0x1c,0x3e,0x7c,0x3e,0x1c, // 3 - 'Heart'
+  5,0x18,0x3c,0x7e,0x3c,0x18, // 4 - 'Diamond'
+  5,0x1c,0x57,0x7d,0x57,0x1c, // 5 - 'Clubs'
+  5,0x1c,0x5e,0x7f,0x5e,0x1c, // 6 - 'Spades'
+  4,0x00,0x18,0x3c,0x18,  // 7 - 'Bullet Point'
+  5,0xff,0xe7,0xc3,0xe7,0xff, // 8 - 'Rev Bullet Point'
+  4,0x00,0x18,0x24,0x18,  // 9 - 'Hollow Bullet Point'
+  5,0xff,0xe7,0xdb,0xe7,0xff, // 10 - 'Rev Hollow BP'
+  5,0x30,0x48,0x3a,0x06,0x0e, // 11 - 'Male'
+  5,0x26,0x29,0x79,0x29,0x26, // 12 - 'Female'
+  5,0x40,0x7f,0x05,0x05,0x07, // 13 - 'Music Note 1'
+  5,0x40,0x7f,0x05,0x25,0x3f, // 14 - 'Music Note 2'
+  5,0x5a,0x3c,0xe7,0x3c,0x5a, // 15 - 'Snowflake'
+  5,0x7f,0x3e,0x1c,0x1c,0x08, // 16 - 'Right Pointer'
+  5,0x08,0x1c,0x1c,0x3e,0x7f, // 17 - 'Left Pointer'
+  5,0x14,0x22,0x7f,0x22,0x14, // 18 - 'UpDown Arrows'
+  5,0x5f,0x5f,0x00,0x5f,0x5f, // 19 - 'Double Exclamation'
+  5,0x06,0x09,0x7f,0x01,0x7f, // 20 - 'Paragraph Mark'
+  4,0x66,0x89,0x95,0x6a,  // 21 - 'Section Mark'
+  5,0x60,0x60,0x60,0x60,0x60, // 22 - 'Double Underline'
+  5,0x94,0xa2,0xff,0xa2,0x94, // 23 - 'UpDown Underlined'
+  5,0x08,0x04,0x7e,0x04,0x08, // 24 - 'Up Arrow'
+  5,0x10,0x20,0x7e,0x20,0x10, // 25 - 'Down Arrow'
+  5,0x08,0x08,0x2a,0x1c,0x08, // 26 - 'Right Arrow'
+  5,0x08,0x1c,0x2a,0x08,0x08, // 27 - 'Left Arrow'
+  5,0x1e,0x10,0x10,0x10,0x10, // 28 - 'Angled'
+  5,0x0c,0x1e,0x0c,0x1e,0x0c, // 29 - 'Squashed #'
+  5,0x30,0x38,0x3e,0x38,0x30, // 30 - 'Up Pointer'
+  5,0x06,0x0e,0x3e,0x0e,0x06, // 31 - 'Down Pointer'
+  2,0x00,0x00,  // 32 - 'Space'
+  1,0x5f, // 33 - '!'
+  3,0x07,0x00,0x07, // 34 - '"'
+  5,0x14,0x7f,0x14,0x7f,0x14, // 35 - '#'
+  5,0x24,0x2a,0x7f,0x2a,0x12, // 36 - '$'
+  5,0x23,0x13,0x08,0x64,0x62, // 37 - '%'
+  5,0x36,0x49,0x56,0x20,0x50, // 38 - '&'
+  3,0x08,0x07,0x03, // 39 - '''
+  3,0x1c,0x22,0x41, // 40 - '('
+  3,0x41,0x22,0x1c, // 41 - ')'
+  5,0x2a,0x1c,0x7f,0x1c,0x2a, // 42 - '*'
+  5,0x08,0x08,0x3e,0x08,0x08, // 43 - '+'
+  3,0x80,0x70,0x30, // 44 - ','
+  5,0x08,0x08,0x08,0x08,0x08, // 45 - '-'
+  2,0x60,0x60,  // 46 - '.'
+  5,0x20,0x10,0x08,0x04,0x02, // 47 - '/'
+  4,0x3e,0x41,0x41,0x3e,  // 48 - '0'
+  3,0x42,0x7f,0x40, // 49 - '1'
+  4,0x72,0x49,0x49,0x46,  // 50 - '2'
+  4,0x21,0x41,0x4d,0x33,  // 51 - '3'
+  4,0x1c,0x12,0x11,0x7f,  // 52 - '4'
+  4,0x27,0x45,0x45,0x39,  // 53 - '5'
+  4,0x3c,0x4a,0x49,0x31,  // 54 - '6'
+  4,0x61,0x11,0x09,0x07,  // 55 - '7'
+  4,0x36,0x49,0x49,0x36,  // 56 - '8'
+  4,0x46,0x49,0x29,0x1e,  // 57 - '9'
+  1,0x14, // 58 - ':'
+  2,0x80,0x68,  // 59 - ';'
+  4,0x08,0x14,0x22,0x41,  // 60 - '<'
+  4,0x14,0x14,0x14,0x14,  // 61 - '='
+  4,0x41,0x22,0x14,0x08,  // 62 - '>'
+  4,0x02,0x59,0x09,0x06,  // 63 - '?'
+  4,0x3e,0x41,0x59,0x4e,  // 64 - '@'
+  5,0x7c,0x12,0x11,0x12,0x7c, // 65 - 'A'
+  5,0x7f,0x49,0x49,0x49,0x36, // 66 - 'B'
+  5,0x3e,0x41,0x41,0x41,0x22, // 67 - 'C'
+  5,0x7f,0x41,0x41,0x41,0x3e, // 68 - 'D'
+  5,0x7f,0x49,0x49,0x49,0x41, // 69 - 'E'
+  5,0x7f,0x09,0x09,0x09,0x01, // 70 - 'F'
+  5,0x3e,0x41,0x41,0x51,0x73, // 71 - 'G'
+  5,0x7f,0x08,0x08,0x08,0x7f, // 72 - 'H'
+  3,0x41,0x7f,0x41, // 73 - 'I'
+  5,0x20,0x40,0x41,0x3f,0x01, // 74 - 'J'
+  5,0x7f,0x08,0x14,0x22,0x41, // 75 - 'K'
+  5,0x7f,0x40,0x40,0x40,0x40, // 76 - 'L'
+  5,0x7f,0x02,0x1c,0x02,0x7f, // 77 - 'M'
+  5,0x7f,0x04,0x08,0x10,0x7f, // 78 - 'N'
+  5,0x3e,0x41,0x41,0x41,0x3e, // 79 - 'O'
+  5,0x7f,0x09,0x09,0x09,0x06, // 80 - 'P'
+  5,0x3e,0x41,0x51,0x21,0x5e, // 81 - 'Q'
+  5,0x7f,0x09,0x19,0x29,0x46, // 82 - 'R'
+  5,0x26,0x49,0x49,0x49,0x32, // 83 - 'S'
+  5,0x03,0x01,0x7f,0x01,0x03, // 84 - 'T'
+  5,0x3f,0x40,0x40,0x40,0x3f, // 85 - 'U'
+  5,0x1f,0x20,0x40,0x20,0x1f, // 86 - 'V'
+  5,0x3f,0x40,0x38,0x40,0x3f, // 87 - 'W'
+  5,0x63,0x14,0x08,0x14,0x63, // 88 - 'X'
+  5,0x03,0x04,0x78,0x04,0x03, // 89 - 'Y'
+  5,0x61,0x59,0x49,0x4d,0x43, // 90 - 'Z'
+  3,0x7f,0x41,0x41, // 91 - '['
+  5,0x02,0x04,0x08,0x10,0x20, // 92 - '\'
+  3,0x41,0x41,0x7f, // 93 - ']'
+  5,0x04,0x02,0x01,0x02,0x04, // 94 - '^'
+  5,0x40,0x40,0x40,0x40,0x40, // 95 - '_'
+  3,0x03,0x07,0x08, // 96 - '`'
+  5,0x20,0x54,0x54,0x78,0x40, // 97 - 'a'
+  5,0x7f,0x28,0x44,0x44,0x38, // 98 - 'b'
+  5,0x38,0x44,0x44,0x44,0x28, // 99 - 'c'
+  5,0x38,0x44,0x44,0x28,0x7f, // 100 - 'd'
+  5,0x38,0x54,0x54,0x54,0x18, // 101 - 'e'
+  4,0x08,0x7e,0x09,0x02,  // 102 - 'f'
+  5,0x18,0xa4,0xa4,0x9c,0x78, // 103 - 'g'
+  5,0x7f,0x08,0x04,0x04,0x78, // 104 - 'h'
+  3,0x44,0x7d,0x40, // 105 - 'i'
+  4,0x40,0x80,0x80,0x7a,  // 106 - 'j'
+  4,0x7f,0x10,0x28,0x44,  // 107 - 'k'
+  3,0x41,0x7f,0x40, // 108 - 'l'
+  5,0x7c,0x04,0x78,0x04,0x78, // 109 - 'm'
+  5,0x7c,0x08,0x04,0x04,0x78, // 110 - 'n'
+  5,0x38,0x44,0x44,0x44,0x38, // 111 - 'o'
+  5,0xfc,0x18,0x24,0x24,0x18, // 112 - 'p'
+  5,0x18,0x24,0x24,0x18,0xfc, // 113 - 'q'
+  5,0x7c,0x08,0x04,0x04,0x08, // 114 - 'r'
+  5,0x48,0x54,0x54,0x54,0x24, // 115 - 's'
+  4,0x04,0x3f,0x44,0x24,  // 116 - 't'
+  5,0x3c,0x40,0x40,0x20,0x7c, // 117 - 'u'
+  5,0x1c,0x20,0x40,0x20,0x1c, // 118 - 'v'
+  5,0x3c,0x40,0x30,0x40,0x3c, // 119 - 'w'
+  5,0x44,0x28,0x10,0x28,0x44, // 120 - 'x'
+  5,0x4c,0x90,0x90,0x90,0x7c, // 121 - 'y'
+  5,0x44,0x64,0x54,0x4c,0x44, // 122 - 'z'
+  3,0x08,0x36,0x41, // 123 - '{'
+  1,0x77, // 124 - '|'
+  3,0x41,0x36,0x08, // 125 - '}'
+  5,0x02,0x01,0x02,0x04,0x02, // 126 - '~'
+  5,0x3c,0x26,0x23,0x26,0x3c, // 127 - 'Hollow Up Arrow'
+  5,0x1e,0xa1,0xa1,0x61,0x12, // 128 - 'C sedilla'
+  5,0x38,0x42,0x40,0x22,0x78, // 129 - 'u umlaut'
+  5,0x38,0x54,0x54,0x55,0x59, // 130 - 'e acute'
+  5,0x21,0x55,0x55,0x79,0x41, // 131 - 'a accent'
+  5,0x21,0x54,0x54,0x78,0x41, // 132 - 'a umlaut'
+  5,0x21,0x55,0x54,0x78,0x40, // 133 - 'a grave'
+  5,0x20,0x54,0x55,0x79,0x40, // 134 - 'a acute'
+  5,0x18,0x3c,0xa4,0xe4,0x24, // 135 - 'c sedilla'
+  5,0x39,0x55,0x55,0x55,0x59, // 136 - 'e accent'
+  5,0x38,0x55,0x54,0x55,0x58, // 137 - 'e umlaut'
+  5,0x39,0x55,0x54,0x54,0x58, // 138 - 'e grave'
+  3,0x45,0x7c,0x41, // 139 - 'i umlaut'
+  4,0x02,0x45,0x7d,0x42,  // 140 - 'i hat'
+  4,0x01,0x45,0x7c,0x40,  // 141 - 'i grave'
+  5,0xf0,0x29,0x24,0x29,0xf0, // 142 - 'A umlaut'
+  5,0xf0,0x28,0x25,0x28,0xf0, // 143 - 'A dot'
+  4,0x7c,0x54,0x55,0x45,  // 144 - 'E grave'
+  7,0x20,0x54,0x54,0x7c,0x54,0x54,0x08, // 145 - 'ae'
+  6,0x7c,0x0a,0x09,0x7f,0x49,0x49,  // 146 - 'AE'
+  5,0x32,0x49,0x49,0x49,0x32, // 147 - 'o hat'
+  5,0x30,0x4a,0x48,0x4a,0x30, // 148 - 'o umlaut'
+  5,0x32,0x4a,0x48,0x48,0x30, // 149 - 'o grave'
+  5,0x3a,0x41,0x41,0x21,0x7a, // 150 - 'u hat'
+  5,0x3a,0x42,0x40,0x20,0x78, // 151 - 'u grave'
+  4,0x9d,0xa0,0xa0,0x7d,  // 152 - 'y umlaut'
+  5,0x38,0x45,0x44,0x45,0x38, // 153 - 'O umlaut'
+  5,0x3c,0x41,0x40,0x41,0x3c, // 154 - 'U umlaut'
+  5,0x3c,0x24,0xff,0x24,0x24, // 155 - 'Cents'
+  5,0x48,0x7e,0x49,0x43,0x66, // 156 - 'Pounds'
+  5,0x2b,0x2f,0xfc,0x2f,0x2b, // 157 - 'Yen'
+  5,0xff,0x09,0x29,0xf6,0x20, // 158 - 'R +'
+  5,0xc0,0x88,0x7e,0x09,0x03, // 159 - 'f notation'
+  5,0x20,0x54,0x54,0x79,0x41, // 160 - 'a acute'
+  3,0x44,0x7d,0x41, // 161 - 'i acute'
+  5,0x30,0x48,0x48,0x4a,0x32, // 162 - 'o acute'
+  5,0x38,0x40,0x40,0x22,0x7a, // 163 - 'u acute'
+  4,0x7a,0x0a,0x0a,0x72,  // 164 - 'n accent'
+  5,0x7d,0x0d,0x19,0x31,0x7d, // 165 - 'N accent'
+  5,0x26,0x29,0x29,0x2f,0x28, // 166
+  5,0x26,0x29,0x29,0x29,0x26, // 167
+  5,0x30,0x48,0x4d,0x40,0x20, // 168 - 'Inverted ?'
+  5,0x38,0x08,0x08,0x08,0x08, // 169 - 'LH top corner'
+  5,0x08,0x08,0x08,0x08,0x38, // 170 - 'RH top corner'
+  5,0x2f,0x10,0xc8,0xac,0xba, // 171 - '1/2'
+  5,0x2f,0x10,0x28,0x34,0xfa, // 172 - '1/4'
+  1,0x7b, // 173 - '| split'
+  5,0x08,0x14,0x2a,0x14,0x22, // 174 - '<<'
+  5,0x22,0x14,0x2a,0x14,0x08, // 175 - '>>'
+  5,0xaa,0x00,0x55,0x00,0xaa, // 176 - '30% shading'
+  5,0xaa,0x55,0xaa,0x55,0xaa, // 177 - '50% shading'
+  5,0x00,0x00,0x00,0x00,0xff, // 178 - 'Right side'
+  5,0x10,0x10,0x10,0x10,0xff, // 179 - 'Right T'
+  5,0x14,0x14,0x14,0x14,0xff, // 180 - 'Right T double H'
+  5,0x10,0x10,0xff,0x00,0xff, // 181 - 'Right T double V'
+  5,0x10,0x10,0xf0,0x10,0xf0, // 182 - 'Top Right double V'
+  5,0x14,0x14,0x14,0x14,0xfc, // 183 - 'Top Right double H'
+  5,0x14,0x14,0xf7,0x00,0xff, // 184 - 'Right T double all'
+  5,0x00,0x00,0xff,0x00,0xff, // 185 - 'Right side double'
+  5,0x14,0x14,0xf4,0x04,0xfc, // 186 - 'Top Right double'
+  5,0x14,0x14,0x17,0x10,0x1f, // 187 - 'Bot Right double'
+  5,0x10,0x10,0x1f,0x10,0x1f, // 188 - 'Bot Right double V'
+  5,0x14,0x14,0x14,0x14,0x1f, // 189 - 'Bot Right double H'
+  5,0x10,0x10,0x10,0x10,0xf0, // 190 - 'Top Right'
+  5,0x00,0x00,0x00,0x1f,0x10, // 191 - 'Bot Left'
+  5,0x10,0x10,0x10,0x1f,0x10, // 192 - 'Bot T'
+  5,0x10,0x10,0x10,0xf0,0x10, // 193 - 'Top T'
+  5,0x00,0x00,0x00,0xff,0x10, // 194 - 'Left T'
+  5,0x10,0x10,0x10,0x10,0x10, // 195 - 'Top side'
+  5,0x10,0x10,0x10,0xff,0x10, // 196 - 'Center +'
+  5,0x00,0x00,0x00,0xff,0x14, // 197 - 'Left side double H'
+  5,0x00,0x00,0xff,0x00,0xff, // 198 - 'Left side double'
+  5,0x00,0x00,0x1f,0x10,0x17, // 199 - 'Bot Left double V'
+  5,0x00,0x00,0xfc,0x04,0xf4, // 200 - 'Top Left double V'
+  5,0x14,0x14,0x17,0x10,0x17, // 201 - 'Bot T double'
+  5,0x14,0x14,0xf4,0x04,0xf4, // 202 - 'Top T double'
+  5,0x00,0x00,0xff,0x00,0xf7, // 203 - 'Left Side double spl'
+  5,0x14,0x14,0x14,0x14,0x14, // 204 - 'Center double'
+  5,0x14,0x14,0xf7,0x00,0xf7, // 205 - 'Center + double'
+  5,0x14,0x14,0x14,0x17,0x14, // 206 - 'Bot T double H'
+  5,0x10,0x10,0x1f,0x10,0x1f, // 207 - 'Bot Right double V'
+  5,0x14,0x14,0x14,0xf4,0x14, // 208 - 'Top T double H'
+  5,0x10,0x10,0xf0,0x10,0xf0, // 209 - 'Top Right double V'
+  5,0x00,0x00,0x1f,0x10,0x1f, // 210 - 'Bot Left double V'
+  5,0x00,0x00,0x00,0x1f,0x14, // 211 - 'Bot Right double H'
+  5,0x00,0x00,0x00,0xfc,0x14, // 212 - 'Top Right double H'
+  5,0x00,0x00,0xf0,0x10,0xf0, // 213 - 'Top Right double V'
+  5,0x10,0x10,0xff,0x10,0xff, // 214 - 'Center + double V'
+  5,0x14,0x14,0x14,0xff,0x14, // 215 - 'Center + double H'
+  5,0x10,0x10,0x10,0x10,0x1f, // 216 - 'Bot Right'
+  5,0x00,0x00,0x00,0xf0,0x10, // 217 - 'Top Left'
+  5,0xff,0xff,0xff,0xff,0xff, // 218 - 'Full Block'
+  5,0xf0,0xf0,0xf0,0xf0,0xf0, // 219 - 'Half Block Bottom'
+  3,0xff,0xff,0xff, // 220 - 'Half Block LHS'
+  5,0x00,0x00,0x00,0xff,0xff, // 221 - 'Half Block RHS'
+  5,0x0f,0x0f,0x0f,0x0f,0x0f, // 222 - 'Half Block Top'
+  5,0x38,0x44,0x44,0x38,0x44, // 223 - 'Alpha'
+  5,0x7c,0x2a,0x2a,0x3e,0x14, // 224 - 'Beta'
+  5,0x7e,0x02,0x02,0x06,0x06, // 225 - 'Gamma'
+  5,0x02,0x7e,0x02,0x7e,0x02, // 226 - 'Pi'
+  5,0x63,0x55,0x49,0x41,0x63, // 227 - 'Sigma'
+  5,0x38,0x44,0x44,0x3c,0x04, // 228 - 'Theta'
+  5,0x40,0x7e,0x20,0x1e,0x20, // 229 - 'mu'
+  5,0x06,0x02,0x7e,0x02,0x02, // 230 - 'Tau'
+  5,0x99,0xa5,0xe7,0xa5,0x99, // 231
+  5,0x1c,0x2a,0x49,0x2a,0x1c, // 232
+  5,0x4c,0x72,0x01,0x72,0x4c, // 233
+  5,0x30,0x4a,0x4d,0x4d,0x30, // 234
+  5,0x30,0x48,0x78,0x48,0x30, // 235
+  5,0xbc,0x62,0x5a,0x46,0x3d, // 236 - 'Zero Slashed'
+  4,0x3e,0x49,0x49,0x49,  // 237
+  5,0x7e,0x01,0x01,0x01,0x7e, // 238
+  5,0x2a,0x2a,0x2a,0x2a,0x2a, // 239 - '3 Bar Equals'
+  5,0x44,0x44,0x5f,0x44,0x44, // 240 - '+/-'
+  5,0x40,0x51,0x4a,0x44,0x40, // 241 - '>='
+  5,0x40,0x44,0x4a,0x51,0x40, // 242 - '<='
+  5,0x00,0x00,0xff,0x01,0x03, // 243 - 'Top of Integral'
+  3,0xe0,0x80,0xff, // 244 - 'Bot of Integral'
+  5,0x08,0x08,0x6b,0x6b,0x08, // 245 - 'Divide'
+  5,0x36,0x12,0x36,0x24,0x36, // 246 - 'Wavy ='
+  5,0x06,0x0f,0x09,0x0f,0x06, // 247 - 'Degree'
+  4,0x00,0x00,0x18,0x18,  // 248 - 'Math Product'
+  4,0x00,0x00,0x10,0x10,  // 249 - 'Short Dash'
+  5,0x30,0x40,0xff,0x01,0x01, // 250 - 'Square Root'
+  5,0x00,0x1f,0x01,0x01,0x1e, // 251 - 'Superscript n'
+  5,0x00,0x19,0x1d,0x17,0x12, // 252 - 'Superscript 2'
+  5,0x00,0x3c,0x3c,0x3c,0x3c, // 253 - 'Centered Square'
+  5,0xff,0x81,0x81,0x81,0xff, // 254 - 'Full Frame'
+  5,0xff,0xff,0xff,0xff,0xff, // 255 - 'Full Block'
 };
 
-byte buffer[10];
 
-void printCharWithShift(char c, int shift_speed){
-  if (c < 32) return;
-  c -= 32;
-  memcpy_P(buffer, CH + 7*c, 7);
-  m.writeSprite(32, 0, buffer);
-  m.setColumn(32 + buffer[0], 0);
-  
-  for (int i=0; i<buffer[0]+1; i++) 
-  {
-    delay(shift_speed);
-    m.shiftLeft(false, false);
-  }
-}
-
-void printStringWithShift(char* s, int shift_speed){
-  while (*s != 0){
-    printCharWithShift(*s, shift_speed);
-    s++;
-  }
-}
-
-void printString(char* s)
+void initMDLib() 
 {
-  int col = 0;
-  m.clear();
-  while (*s != 0)
+  mx.begin();
+  // module initialize
+  mx.control(MD_MAX72XX::INTENSITY, 0); // dot matix intensity 0-15
+  mx.setFont( _sys_var_single );
+}
+
+
+void printStringWithShift(char *p, int shift_speed)
+{
+  uint8_t charWidth;
+  uint8_t cBuf[8];  // this should be ok for all built-in fonts
+
+  PRINTS("\nScrolling text");
+  mx.clear();
+
+  while (*p != '\0')
   {
-    if (*s < 32) continue;
-    char c = *s - 32;
-    memcpy_P(buffer, CH + 7*c, 7);
-    m.writeSprite(col, 0, buffer);
-    m.setColumn(col + buffer[0], 0);
-    col += buffer[0] + 1;
-    s++;
+    charWidth = mx.getChar(*p++, sizeof(cBuf) / sizeof(cBuf[0]), cBuf);
+
+    for (uint8_t i=0; i<=charWidth; i++)  // allow space between characters
+    {
+      mx.transform(MD_MAX72XX::TSL);
+      if (i < charWidth)
+        mx.setColumn(0, cBuf[i]);
+      delay(shift_speed);
+    }
   }
 }
+
+void printString(char* s) 
+{
+  printText( 0, MAX_DEVICES-1, s );
+}
+
+
+void printText(uint8_t modStart, uint8_t modEnd, char *pMsg)
+// Print the text string to the LED matrix modules specified.
+// Message area is padded with blank columns after printing.
+{
+  uint8_t   state = 0;
+  uint8_t   curLen;
+  uint16_t  showLen;
+  uint8_t   cBuf[8];
+  int16_t   col = ((modEnd + 1) * COL_SIZE) - 1;
+
+  mx.control(modStart, modEnd, MD_MAX72XX::UPDATE, MD_MAX72XX::OFF);
+
+  do     // finite state machine to print the characters in the space available
+  {
+    switch(state)
+    {
+      case 0: // Load the next character from the font table
+        // if we reached end of message, reset the message pointer
+        if (*pMsg == '\0')
+        {
+          showLen = col - (modEnd * COL_SIZE);  // padding characters
+          state = 2;
+          break;
+        }
+
+        // retrieve the next character form the font file
+        showLen = mx.getChar(*pMsg++, sizeof(cBuf)/sizeof(cBuf[0]), cBuf);
+        curLen = 0;
+        state++;
+        // !! deliberately fall through to next state to start displaying
+
+      case 1: // display the next part of the character
+        mx.setColumn(col--, cBuf[curLen++]);
+
+        // done with font character, now display the space between chars
+        if (curLen == showLen)
+        {
+          showLen = 1;
+          state = 2;
+        }
+        break;
+
+      case 2: // initialize state for displaying empty columns
+        curLen = 0;
+        state++;
+        // fall through
+
+      case 3:  // display inter-character spacing or end of message padding (blank columns)
+        mx.setColumn(col--, 0);
+        curLen++;
+        if (curLen == showLen)
+          state = 0;
+        break;
+
+      default:
+        col = -1;   // this definitely ends the do loop
+    }
+  } while (col >= (modStart * COL_SIZE));
+
+  mx.control(modStart, modEnd, MD_MAX72XX::UPDATE, MD_MAX72XX::ON);
+}
+
 
 ////////////////////////////////////////////////////////
 //
@@ -872,7 +1079,7 @@ void handle_msg()  {
     intensity = "0";
   }
   byte bIntensity = (byte)intensity.toInt();
-  m.setIntensity( bIntensity );    
+  mx.control(MD_MAX72XX::INTENSITY, bIntensity);
   Serial.print("intensity: "); Serial.println(intensity);
 
   strcpy( auto_brightness, wServer.arg("auto_brightness").c_str() );
