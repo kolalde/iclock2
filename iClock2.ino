@@ -1,16 +1,16 @@
 /*
 
-   GPIO Pins Used
-   0    WS2812
+   GPIO Used
+   0    
    1    TX0
-   2    DS1820
+   2    
    3    RX0
-   4    SDA   Button to display weather
-   5    SCL   ?
-   12   MAX7219
-   13   MAX7219
-   14   MAX7219
-   15   GND    (was load for MAX, unstable, READ)
+   4    SDA   
+   5    SCL   
+   12   MAX7219     SS
+   13   MAX7219     DIN
+   14   MAX7219     SCK
+   15   WS2812/WebClient OTA
    16
    ADC  LDR
  * */
@@ -23,7 +23,6 @@
 #include <pgmspace.h>                   // strings in flash to save on ram
 #include <WiFiManager.h>                // captive portal for WiFi setup
 #include <FastLED.h>                    // controlling WS2812s
-#include <DallasTemperature.h>          // DS1820 temp sensor
 #include <PubSubClient.h>               // MQTT
 #include <ESP8266WebServer.h>           // For controlling clock
 #include <ESP8266mDNS.h>                // For WebServer
@@ -96,9 +95,11 @@ bool displayWeatherButton() {
   int buttonState = 0;
 
   buttonState = digitalRead(displayWeatherPin);
+
   if (buttonState == HIGH) {
     return false;
   } else {
+    Serial.println("PRESSED");
     return true;
   }
 }
@@ -163,7 +164,7 @@ void setupOTA() {
 // MD_MAX72xx defines for MAX7219s
 //
 // Turn on debug statements to the serial output
-#define  DEBUG  1
+#define  DEBUG  0
 #if  DEBUG
 #define PRINT(s, x) { Serial.print(F(s)); Serial.print(x); }
 #define PRINTS(x) Serial.print(F(x))
@@ -178,10 +179,10 @@ void setupOTA() {
 #define MAX_DEVICES 4
 
 #define CLK_PIN   14  // or SCK
-#define DATA_PIN  13  // or MOSI
 #define CS_PIN    12  // or SS
-// SPI hardware interface
-MD_MAX72XX mx = MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
+#define DATA_PIN  13  // or MOSI
+// SPI hardware interface (for SCK and MOSI)
+MD_MAX72XX *mx = new MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
 
 
 ////////////////////////////////////////////////////////
@@ -191,6 +192,7 @@ MD_MAX72XX mx = MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
 //#define LED_PIN     5
 #define LED_PIN     15
 #define NUM_LEDS    47
+//#define NUM_LEDS    20
 #define BRIGHTNESS  25
 #define LED_TYPE    WS2812
 #define COLOR_ORDER GRB
@@ -208,7 +210,7 @@ CRGB leds[NUM_LEDS];
 // Initial wifi setup, portal
 void setupWifi() {
   // turn on WIFI using stored SSID/PWD or captive portal
-  printString("WiFi");
+  printString("Setup");
   WiFiManager wifiManager;
   wifiManager.autoConnect( nodeName );
   Serial.println("\nWiFi connected");
@@ -216,7 +218,6 @@ void setupWifi() {
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
   printStringWithShift( (char*)WiFi.SSID().c_str(), 50 );
-  printStringWithShift( (char*)F("       "), 50 );
 }
 
 
@@ -250,10 +251,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
 }
 
 void reconnect() {
-  // Loop until we're reconnected
-  int mqtt_tries = 0;
+  // Try again to reconnect, but don't loop and stall the time
   
-  while (!client.connected() ) {
+  if (!client.connected() ) {
     Serial.print("Attempting MQTT connection...");
     // Create a random client ID
     String clientId = nodeName;
@@ -266,16 +266,9 @@ void reconnect() {
       // ... and resubscribe
       client.subscribe(inTopic);
     } else {
-      mqtt_tries++;
       Serial.print("failed, rc=");
       Serial.print(client.state());
-      if ( mqtt_tries > 20 ) {
-        Serial.println(" No more tries");
-        printString((char*) F("REBOOT") );
-        ESP.reset();
-      }
-      Serial.println(" try again in .5 seconds");
-      delay(500);
+      delay(100);
     }
   }
 }
@@ -334,42 +327,9 @@ bool isLight() {
 }
 
 
-////////////////////////////////////////////////////////
-//
-// DS1820
-//
-// Data wire is plugged into port 2 on the Arduino
-#define ONE_WIRE_BUS 2
-
-OneWire oneWire(ONE_WIRE_BUS);
-DallasTemperature sensors(&oneWire);
-DeviceAddress insideThermometer = { 0x10, 0x5A, 0xEA, 0x47, 0x00, 0x08, 0x00, 0x6D };
-
-#define SEALEVELPRESSURE_HPA (1013.25)
-
+#define SEALEVELPRESSURE_HPA (1019)
 Adafruit_BME280 bme; // I2C
 
-
-// function to print a device address
-void printAddress(DeviceAddress deviceAddress)
-{
-  for (uint8_t i = 0; i < 8; i++)
-  {
-    if (deviceAddress[i] < 16) Serial.print("0");
-    Serial.print(deviceAddress[i], HEX);
-  }
-}
-
-// function to print the temperature for a device
-void getTemperature(DeviceAddress deviceAddress, char* buff)
-{
-  float tempC = round( sensors.getTempC(deviceAddress) );
-  Serial.print( F("Temp C: ") );
-  Serial.print( tempC );
-  Serial.print( F(" Temp F: ") );
-  Serial.println(DallasTemperature::toFahrenheit(tempC)); // Converts tempC to Fahrenheit
-  buff =  ftoa(buff, round(DallasTemperature::toFahrenheit(tempC)), 0);
-}
 
 ////////////////////////////////////////////////////////
 //
@@ -405,12 +365,15 @@ void webServerSetup() {
 
 
 ////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////
 //
 // SETUP
 //
+////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////
 void setup() {
   const char compile_date[] = __DATE__ " " __TIME__ " " __FILE__;
-  Serial.begin(115200); delay(2000);
+  Serial.begin(115200); delay(50);
   Serial.print("\n***** ");
   Serial.print( nodeName );
   Serial.println(" *****");
@@ -421,6 +384,7 @@ void setup() {
 
   Serial.println("----------- Init and clear the WS2812s ----------");
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection( TypicalLEDStrip );
+  setLedColor("Purple", BRIGHTNESS);
   setLedColor("Purple", BRIGHTNESS);
 
   Serial.println("------------------ Init WiFi --------------------");
@@ -455,26 +419,16 @@ void setup() {
   configTime(0, 0, "pool.ntp.org");
   delay( 200 );
 
-  Serial.println("--------------- Init and DS1820 ----------------");
-  // Check for and get indoor temp, DS1820
-  printString( (char*) F("Temp") );
-  sensors.begin();
-  if (!sensors.getAddress(insideThermometer, 0))
-  {
-    printString( (char*) F("No Temp!") );
-    Serial.println("Unable to find address for Device 0");
-    //ESP.reset();
-  }
-  delay( 200 );
-
 
   Serial.println("----------------- Init BME280 ------------------");
-  // Check for and get indoor temp, DS1820
+  // Check for and get indoor temp, and other BME data
+  printString( (char*) F("Temp") );
   if ( !bme.begin() ) {
       Serial.print("Could not find a valid BME280 sensor, check wiring: ");
       Serial.println( bme.begin() );   
   }  
-
+  delay( 200 );
+  
   Serial.println("------------------ WebServer ------------------");
   printString( (char*) F("HTTP") );
   delay( 200 );
@@ -483,9 +437,10 @@ void setup() {
   Serial.println("--------------------- OTA ---------------------");
   printString( (char*) F("OTA") );
   delay( 200 );
+  strcpy( timeBuf, "No OWM data");
   setupOTA();
 
-  Serial.println("------------------ Setup getOWM ---------------");
+  Serial.println("------------------ Setup OpenWeatherMap OWM ---------------");
   Serial.println("Current Conditions: ");
 
   printString( (char*) F("OWM") );
@@ -568,7 +523,6 @@ void loop()
 
     // Usually display the time, every tempPubInterval display the temp for 3s
     if  ( !printTempFlag ) {
-      //sprintf( timeBuf, "%2d:%02d:%02d", hourFormat12(), minute(), second() );
       strftime (timeBuf, 10, "%I:%M:%S", timeinfo);
       if ( *timeBuf == '0' )
         *timeBuf = ' ';         // replace leading 0 with a space
@@ -581,9 +535,9 @@ void loop()
     //
     if ( strcmp(auto_brightness, "On") == 0 ) {
       if ( isLight()  == true )
-        mx.control(MD_MAX72XX::INTENSITY, 15);
+        mx->control(MD_MAX72XX::INTENSITY, 15);
       if ( isLight() == false )
-        mx.control(MD_MAX72XX::INTENSITY, 0);
+        mx->control(MD_MAX72XX::INTENSITY, 0);
     }
 
     //
@@ -591,16 +545,9 @@ void loop()
     //
     if ( tv.tv_sec % tempPubInterval == 0 )
     {
-      Serial.println(F("Requesting temperatures..."));
-      sensors.requestTemperatures(); // Send the command to get temperatures
-      Serial.println(F("DONE"));
-
-      // It responds almost immediately. Let's print out the data
-//      getTemperature( insideThermometer, timeBuf ); // Use a simple function to print out the data
-      printValues( timeBuf ); // Use a simple function to print out the data
+      printValues( timeBuf ); // Get BME stats
       client.publish(tempTopic, timeBuf);
       strcat( timeBuf, "^F" );
-      initMDLib( );
       printString(timeBuf);
       printTempFlag = true;
       displayTempTicker.attach( 3, printTempCountDown );
@@ -649,10 +596,10 @@ void loop()
 
 void initMDLib()
 {
-  mx.begin();
+  mx->begin();
   // module initialize
-  mx.control(MD_MAX72XX::INTENSITY, oldIsLight ); // dot matix intensity 0-15
-  mx.setFont( _sys_var_single );
+  mx->control(MD_MAX72XX::INTENSITY, oldIsLight ); // dot matix intensity 0-15
+  mx->setFont( _sys_var_single );
 }
 
 
@@ -662,17 +609,17 @@ void printStringWithShift(char *p, int shift_speed)
   uint8_t cBuf[8];  // this should be ok for all built-in fonts
 
   PRINTS("\nScrolling text");
-  mx.clear();
+  mx->clear();
 
   while (*p != '\0')
   {
-    charWidth = mx.getChar(*p++, sizeof(cBuf) / sizeof(cBuf[0]), cBuf);
+    charWidth = mx->getChar(*p++, sizeof(cBuf) / sizeof(cBuf[0]), cBuf);
 
     for (uint8_t i = 0; i <= charWidth; i++) // allow space between characters
     {
-      mx.transform(MD_MAX72XX::TSL);
+      mx->transform(MD_MAX72XX::TSL);
       if (i < charWidth)
-        mx.setColumn(0, cBuf[i]);
+        mx->setColumn(0, cBuf[i]);
       delay(shift_speed);
     }
   }
@@ -694,7 +641,7 @@ void printText(uint8_t modStart, uint8_t modEnd, char *pMsg)
   uint8_t   cBuf[8];
   int16_t   col = ((modEnd + 1) * COL_SIZE) - 1;
 
-  mx.control(modStart, modEnd, MD_MAX72XX::UPDATE, MD_MAX72XX::OFF);
+  mx->control(modStart, modEnd, MD_MAX72XX::UPDATE, MD_MAX72XX::OFF);
 
   do     // finite state machine to print the characters in the space available
   {
@@ -710,13 +657,13 @@ void printText(uint8_t modStart, uint8_t modEnd, char *pMsg)
         }
 
         // retrieve the next character form the font file
-        showLen = mx.getChar(*pMsg++, sizeof(cBuf) / sizeof(cBuf[0]), cBuf);
+        showLen = mx->getChar(*pMsg++, sizeof(cBuf) / sizeof(cBuf[0]), cBuf);
         curLen = 0;
         state++;
       // !! deliberately fall through to next state to start displaying
 
       case 1: // display the next part of the character
-        mx.setColumn(col--, cBuf[curLen++]);
+        mx->setColumn(col--, cBuf[curLen++]);
 
         // done with font character, now display the space between chars
         if (curLen == showLen)
@@ -732,7 +679,7 @@ void printText(uint8_t modStart, uint8_t modEnd, char *pMsg)
       // fall through
 
       case 3:  // display inter-character spacing or end of message padding (blank columns)
-        mx.setColumn(col--, 0);
+        mx->setColumn(col--, 0);
         curLen++;
         if (curLen == showLen)
           state = 0;
@@ -743,7 +690,7 @@ void printText(uint8_t modStart, uint8_t modEnd, char *pMsg)
     }
   } while (col >= (modStart * COL_SIZE));
 
-  mx.control(modStart, modEnd, MD_MAX72XX::UPDATE, MD_MAX72XX::ON);
+  mx->control(modStart, modEnd, MD_MAX72XX::UPDATE, MD_MAX72XX::ON);
 }
 
 
@@ -845,7 +792,7 @@ void handle_msg()  {
   }
   byte bIntensity = (byte)intensity.toInt();
   oldIsLight = (int) bIntensity;
-  mx.control(MD_MAX72XX::INTENSITY, bIntensity);
+  mx->control(MD_MAX72XX::INTENSITY, bIntensity);
   Serial.print("intensity: "); Serial.println(intensity);
 
   strcpy( auto_brightness, wServer.arg("auto_brightness").c_str() );
