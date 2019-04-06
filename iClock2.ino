@@ -38,18 +38,8 @@
 #include <Adafruit_BME280.h>
 
 #include "sys_var_single.h"
+#include "config.h"
 
-const char TSauth[] = "51165f4f92fa4c148bb43179b0347a9e";
-const char TSWriteApiKey[] = "KPNEEM5L2OT999MA";
-const char nodeName[] = "iClock2";
-const char awakeString[] = "ko_house/sensor/iClock2/awake";
-const char connectString[] = "ko_house/sensor/iClock2/connect";
-const char tempTopic[] = "ko_house/sensor/iClock2/board_temp";
-const char inTopic[] = "ko_house/sensor/iClock2/inTopic";
-const char* mqtt_server = "korpi.local";
-const int  tempPubInterval = 30;
-const char *ow_key      = "29317aa62133de8ffea08f388df205d4";
-const char *servername = "api.openweathermap.org";
 OWMconditions      owCC;
 OWMfiveForecast    owF5;
 OWMoneForecast    owF1;
@@ -558,7 +548,7 @@ void loop()
       if ( !getOWMNow ) {
         // Write to ThingSpeak. There are up to 8 fields in a channel, allowing you to store up to 8 different
         // pieces of information in a channel.  Here, we write to field 1.
-        int x = ThingSpeak.writeField(77958, 1, timeBuf, TSWriteApiKey);
+        int x = ThingSpeak.writeField(TSChannelID, 1, timeBuf, TSWriteApiKey);
         if (x != 200) 
           Serial.println("Problem updating channel. HTTP error code " + String(x));        
       } else {
