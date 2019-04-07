@@ -39,7 +39,7 @@
 #include "Adafruit_MCP23017.h"          // Port expander (not using interrupts
 
 #include "sys_var_single.h"
-#include "config.h"
+#include "myConfig.h"
 
 Adafruit_MCP23017 mcp;
 const int mcpOWMButton = 0;
