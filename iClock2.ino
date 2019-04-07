@@ -34,11 +34,15 @@
 #include <ESP8266HTTPClient.h>          // local driven OTA updates
 #include <ESP8266httpUpdate.h>          //
 #include "ThingSpeak.h"                 // Simple interface now
-#include <Adafruit_Sensor.h>
+#include <Adafruit_Sensor.h>            // Sensor.h required by the BME280 lib
 #include <Adafruit_BME280.h>
+#include "Adafruit_MCP23017.h"          // Port expander (not using interrupts
 
 #include "sys_var_single.h"
 #include "config.h"
+
+Adafruit_MCP23017 mcp;
+const int mcpOWMButton = 0;
 
 OWMconditions      owCC;
 OWMfiveForecast    owF5;
@@ -357,7 +361,7 @@ void webServerSetup() {
 ////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////
 //
-// SETUP
+// S E T U P
 //
 ////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////
@@ -453,6 +457,17 @@ void setup() {
       ESP.reset();
   }
 
+  Serial.println("--------------------- MCP ---------------------");
+  printString( (char*) F("MCP") );
+  delay( 200 );
+  mcp.begin();                // use default address 0
+  mcp.pinMode(mcpOWMButton, INPUT);
+  mcp.pullUp(mcpOWMButton, HIGH);        // turn on a 100K pullup internally
+  mcp.pinMode(7, OUTPUT);     // use the p13 LED as debugging
+  // When pushed   REPLACE THIS
+  //pinMode( displayWeatherPin, INPUT );
+
+  
   // Grab and stash the bootTime   what's really needed here?
   gettimeofday(&tv, &tz);
   clock_gettime(0, &tp); // also supported by esp8266 code
@@ -462,16 +477,13 @@ void setup() {
   timeinfo = localtime (&tnow);
   strcpy( bootTime, asctime(localtime(&tnow)) );
 
-  // When pushed
-  pinMode( displayWeatherPin, INPUT );
-
   Serial.println("------------------ ThingSpeak ------------------");
   ThingSpeak.begin(tsClient);  // Initialize ThingSpeak
 
 
   Serial.println("------------------ All Setup ------------------");
-  printStringWithShift("iClock2       ", 50);
-  delay(200);
+  printStringWithShift( (char*) nodeName, 50);
+  delay(300);
 }
 
 
@@ -494,7 +506,13 @@ void loop()
 
 
   // Check for a button press, display external weather in a blocking call
-  if ( displayWeatherButton( ) ) {
+//  if ( displayWeatherButton( ) ) {
+//    printStringWithShift( displayOutsideWeather( timeBuf ), 50 ); delay( 1 * 1000 );
+//    printStringWithShift( displayOutsideForecast( timeBuf ), 50 ); delay( 1 * 1000 );
+//  }
+
+  if ( mcp.digitalRead(mcpOWMButton) == 0 ) {     // Active low
+    mcp.digitalWrite( 7, HIGH );
     printStringWithShift( displayOutsideWeather( timeBuf ), 50 ); delay( 1 * 1000 );
     printStringWithShift( displayOutsideForecast( timeBuf ), 50 ); delay( 1 * 1000 );
   }
@@ -580,6 +598,9 @@ void loop()
     printStringWithShift( "   ", 50 );
   } else
     textOn = "time";
+
+  mcp.digitalWrite( 7, LOW );
+
 }
 
 
@@ -809,7 +830,7 @@ String setForm( ) {
     "<!DOCTYPE html>"
     "<html>"
     "<body>"
-    "<title>iClock v2</title>"
+    "<title>Clock v2</title>"
     "<head> <meta name='viewport' content='width=device-width'></head>"
     "<center>"
     "<img src='http://www.olalde.org/Comp_TOL_Fam.png'><br>"
@@ -857,9 +878,9 @@ void handle_msgAdmin()  {
 
   if ( wServer.arg("Update").equals("Update") ) {
     Serial.println("Clicked Update");
-    wServer.send(200, "text/html",
-                 "<!DOCTYPE html><html><body><title>iClock v2</title><head><meta name='viewport' content='width=device-width'>\
-      <meta http-equiv='refresh' content='60; url=http://iclock2.local/'></head><center><h1>UPDATING!!</h1>\
+    String nodeNameStr = nodeName;
+    String sendPage = "<!DOCTYPE html><html><body><title>Clock v2</title><head><meta name='viewport' content='width=device-width'>\
+      <meta http-equiv='refresh' content='60; url=http://" + nodeNameStr + ".local/'></head><center><h1>UPDATING!!</h1>\
       <script>\
         var timeleft = 60;\
         var downloadTimer = setInterval(function(){\
@@ -870,7 +891,9 @@ void handle_msgAdmin()  {
         }, 1000);\
       </script>\
       <progress value='0' max='60' id='progressBar'></progress>\
-      " );
+      ";
+      
+    wServer.send(200, "text/html", sendPage.c_str() );
 
     t_httpUpdate_return ret = ESPhttpUpdate.update(OTAclient, "http://192.168.1.225/file.bin");
     // Or:
@@ -898,7 +921,7 @@ String setAdmin( ) {
     "<!DOCTYPE html>"
     "<html>"
     "<body>"
-    "<title>iClock v2 Admin</title>"
+    "<title>Clock v2 Admin</title>"
     "<head> <meta name='viewport' content='width=device-width'></head>"
 
     "<form action='msgAdmin'><p>Select administrative options<br>"
