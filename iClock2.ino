@@ -37,6 +37,7 @@
 #include <Adafruit_Sensor.h>            // Sensor.h required by the BME280 lib
 #include <Adafruit_BME280.h>
 #include "Adafruit_MCP23017.h"          // Port expander (not using interrupts
+#include <MPR121.h>
 
 #include "sys_var_single.h"
 #include "myConfig.h"
@@ -97,6 +98,82 @@ bool displayWeatherButton() {
     return true;
   }
 }
+
+
+void setupMPR121() {
+  
+  Serial.println("Going about setting up MPR121");  
+  //while(!Serial);  // only needed if you want serial feedback with the
+           // Arduino Leonardo or Bare Touch Board
+  
+  // 0x5C is the MPR121 I2C address on the Bare Touch Board
+  if(!MPR121.begin(0x5A)){ 
+    Serial.println("error setting up MPR121");  
+    switch(MPR121.getError()){
+      case NO_ERROR:
+        Serial.println("no error");
+        break;  
+      case ADDRESS_UNKNOWN:
+        Serial.println("incorrect address");
+        break;
+      case READBACK_FAIL:
+        Serial.println("readback failure");
+        break;
+      case OVERCURRENT_FLAG:
+        Serial.println("overcurrent on REXT pin");
+        break;      
+      case OUT_OF_RANGE:
+        Serial.println("electrode out of range");
+        break;
+      case NOT_INITED:
+        Serial.println("not initialised");
+        break;
+      default:
+        Serial.println("unknown error");
+        break;      
+    }
+    while(1);
+  }
+  
+  // The MPR121 allows a mixture of GPIO and touch sense electrodes to be
+  // selected for the 12 pins labelled E0..E11, but you can't just pick and
+  // choose arbitrarily. The first four electrodes (E0..E3) are always touch
+  // sense pins - they can't be anything else. Then you can set the number of
+  // GPIO pins from 0 to 8 for the remaining pins. These are set sequentially
+  // i.e. if 1 pin is required, this is ALWAYS E11, if 2 pins, E11 and E10
+  // and so on up to 8 pins (E11..E4). 
+  
+  // See p.20 of http://www.nxp.com/docs/en/data-sheet/MPR121.pdf
+  // for more details.
+  
+  MPR121.setNumDigPins(2);
+  
+  // Note that each electrode has 7 possible pin modes (6 GPIO and 1 touch)
+  // these are INPUT, INPUT_PULLUP (input with internal pullup), INPUT_PULLDOWN 
+  // (input with internal pulldown), OUTPUT, OUTPUT_HIGHSIDE (open collector 
+  // output, high-side), OUTPUT_LOWSIDE (open collector output, low side).
+  
+  // See p.3 of http://cache.freescale.com/files/sensors/doc/app_note/AN3894.pdf 
+  // for more details
+  
+  MPR121.pinMode(11, OUTPUT);
+  MPR121.pinMode(10, INPUT_PULLUP);
+
+//  MPR121.setInterruptPin(0);
+
+  // this is the touch threshold - setting it low makes it more like a proximity trigger
+  // default value is 40 for touch
+  MPR121.setTouchThreshold(80);
+  
+  // this is the release threshold - must ALWAYS be smaller than the touch threshold
+  // default value is 20 for touch
+  MPR121.setReleaseThreshold(40);  
+
+  // initial data update
+  MPR121.updateTouchData();
+
+}
+
 
 ////////////////////////////////////////////////////////
 //
@@ -250,10 +327,10 @@ void reconnect() {
   if (!client.connected() ) {
     Serial.print("Attempting MQTT connection...");
     // Create a random client ID
-    String clientId = nodeName;
-    clientId += String(random(0xffff), HEX);
+    //String clientId = nodeName;
+    //clientId += String(random(0xffff), HEX);
     // Attempt to connect
-    if (client.connect(clientId.c_str())) {
+    if (client.connect( nodeName ) ) {      //clientId.c_str())) {
       Serial.println("connected");
       // Once connected, publish an announcement...
       client.publish(connectString, "reconnected");
@@ -480,6 +557,8 @@ void setup() {
   Serial.println("------------------ ThingSpeak ------------------");
   ThingSpeak.begin(tsClient);  // Initialize ThingSpeak
 
+  setupMPR121();
+
 
   Serial.println("------------------ All Setup ------------------");
   printStringWithShift( (char*) nodeName, 50);
@@ -505,16 +584,26 @@ void loop()
   timeinfo = localtime (&tnow);
 
 
+  bool readVal = MPR121.digitalRead(10); // read E10
+
+  MPR121.digitalWrite(11, !readVal);     // write the inverse to E11
+
+
   // Check for a button press, display external weather in a blocking call
-//  if ( displayWeatherButton( ) ) {
-//    printStringWithShift( displayOutsideWeather( timeBuf ), 50 ); delay( 1 * 1000 );
-//    printStringWithShift( displayOutsideForecast( timeBuf ), 50 ); delay( 1 * 1000 );
-//  }
+  if ( displayWeatherButton( ) ) {
+    printStringWithShift( displayOutsideWeather( timeBuf ), 50 ); delay( 1 * 1000 );
+    printStringWithShift( displayOutsideForecast( timeBuf ), 50 ); delay( 1 * 1000 );
+  }
 
   if ( mcp.digitalRead(mcpOWMButton) == 0 ) {     // Active low
     mcp.digitalWrite( 7, HIGH );
     printStringWithShift( displayOutsideWeather( timeBuf ), 50 ); delay( 1 * 1000 );
     printStringWithShift( displayOutsideForecast( timeBuf ), 50 ); delay( 1 * 1000 );
+  }
+
+  MPR121.updateTouchData();
+  if ( MPR121.isNewTouch(0) == 1 ) {
+    Serial.print( "TOUCHED!!  " ); Serial.print( "MPR121.isNewTouch(0): " ); Serial.println( MPR121.isNewTouch(0) );
   }
 
   // localtime / gmtime every second change
@@ -600,9 +689,7 @@ void loop()
     textOn = "time";
 
   mcp.digitalWrite( 7, LOW );
-
 }
-
 
 
 void initMDLib()
