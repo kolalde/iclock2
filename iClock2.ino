@@ -15,6 +15,7 @@
    ADC  LDR
  * */
 
+#include "myConfig.h"
 #include <ESP8266WiFi.h>                // in general
 #include <sys/time.h>                   // struct timeval
 #include <coredecls.h>                  // settimeofday_cb()
@@ -23,7 +24,6 @@
 #include <pgmspace.h>                   // strings in flash to save on ram
 #include <WiFiManager.h>                // captive portal for WiFi setup
 #include <FastLED.h>                    // controlling WS2812s
-#include <PubSubClient.h>               // MQTT
 #include <ESP8266WebServer.h>           // For controlling clock
 #include <ESP8266mDNS.h>                // For WebServer
 #include <WiFiUdp.h>                    // For OTA
@@ -36,14 +36,9 @@
 #include "ThingSpeak.h"                 // Simple interface now
 #include <Adafruit_Sensor.h>            // Sensor.h required by the BME280 lib
 #include <Adafruit_BME280.h>
-#include "Adafruit_MCP23017.h"          // Port expander (not using interrupts
 #include <MPR121.h>
 
 #include "sys_var_single.h"
-#include "myConfig.h"
-
-Adafruit_MCP23017 mcp;
-const int mcpOWMButton = 0;
 
 OWMconditions      owCC;
 OWMfiveForecast    owF5;
@@ -51,7 +46,6 @@ OWMoneForecast    owF1;
 Ticker getOWM;
 Ticker displayTempTicker;
 bool getOWMNow = true;
-const int displayWeatherPin = 0;
 WiFiClient  tsClient;
 
 
@@ -86,6 +80,13 @@ bool toggleOWM() {
   return getOWMNow;
 }
 
+
+////////////////////////////////////////////////////////
+//
+// MPR121 routines
+//
+// Leave here until other MPR121s arrive (for dev)
+const int displayWeatherPin = 0;
 bool displayWeatherButton() {
   int buttonState = 0;
 
@@ -99,6 +100,9 @@ bool displayWeatherButton() {
   }
 }
 
+const int mprLED = 10;          // I'd be nice to be able to use this for ESP8266httpUpdate
+const int mprButton = 11;
+const int mprSense  = 0;
 
 void setupMPR121() {
   
@@ -132,8 +136,9 @@ void setupMPR121() {
         Serial.println("unknown error");
         break;      
     }
-    while(1);
+    //while(1);    REPLACE WITH???
   }
+  Serial.println("Back from MPR121.begin");  
   
   // The MPR121 allows a mixture of GPIO and touch sense electrodes to be
   // selected for the 12 pins labelled E0..E11, but you can't just pick and
@@ -156,9 +161,9 @@ void setupMPR121() {
   // See p.3 of http://cache.freescale.com/files/sensors/doc/app_note/AN3894.pdf 
   // for more details
   
-  MPR121.pinMode(11, OUTPUT);
-  MPR121.pinMode(10, INPUT_PULLUP);
-
+  MPR121.pinMode(mprLED, OUTPUT);
+  MPR121.pinMode(mprButton, INPUT_PULLUP);
+  
 //  MPR121.setInterruptPin(0);
 
   // this is the touch threshold - setting it low makes it more like a proximity trigger
@@ -262,8 +267,6 @@ MD_MAX72XX *mx = new MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
 //
 //#define LED_PIN     5
 #define LED_PIN     15
-#define NUM_LEDS    47
-//#define NUM_LEDS    20
 #define BRIGHTNESS  25
 #define LED_TYPE    WS2812
 #define COLOR_ORDER GRB
@@ -296,6 +299,8 @@ void setupWifi() {
 //
 // PubSub   (MQTT)
 //
+#if USE_MQTT
+#include <PubSubClient.h>               // MQTT
 WiFiClient espClient;
 PubSubClient client(espClient);
 
@@ -338,8 +343,10 @@ void reconnect() {
       client.subscribe(inTopic);
     } else {
       Serial.print("failed, rc=");
-      Serial.print(client.state());
+      Serial.printf("Connection status: %d\n", WiFi.status());
+      Serial.println(client.state()); 
       delay(100);
+      //WiFi.mode(WIFI_STA);
     }
   }
 }
@@ -350,7 +357,7 @@ void pubSub_connect_yield() {
   }
   client.loop();
 }
-
+#endif
 
 ////////////////////////////////////////////////////////
 //
@@ -461,6 +468,7 @@ void setup() {
   Serial.println("------------------ Init WiFi --------------------");
   setupWifi();
 
+#if USE_MQTT
   Serial.println("------------------ Init MQTT --------------------");
   //setupMQTT();
   printString( (char*) F("MQTT") );
@@ -469,6 +477,7 @@ void setup() {
   reconnect();
   client.publish(awakeString, "awake");
   delay( 200 );
+#endif
 
   Serial.println("------------ Init NTP, TZ, and DST -------------");
   // set function to call when time is set
@@ -534,16 +543,10 @@ void setup() {
       ESP.reset();
   }
 
-  Serial.println("--------------------- MCP ---------------------");
-  printString( (char*) F("MCP") );
+  Serial.println("--------------------- MPR ---------------------");
+  printString( (char*) F("MPR") );
   delay( 200 );
-  mcp.begin();                // use default address 0
-  mcp.pinMode(mcpOWMButton, INPUT);
-  mcp.pullUp(mcpOWMButton, HIGH);        // turn on a 100K pullup internally
-  mcp.pinMode(7, OUTPUT);     // use the p13 LED as debugging
-  // When pushed   REPLACE THIS
-  //pinMode( displayWeatherPin, INPUT );
-
+  setupMPR121();
   
   // Grab and stash the bootTime   what's really needed here?
   gettimeofday(&tv, &tz);
@@ -556,9 +559,6 @@ void setup() {
 
   Serial.println("------------------ ThingSpeak ------------------");
   ThingSpeak.begin(tsClient);  // Initialize ThingSpeak
-
-  setupMPR121();
-
 
   Serial.println("------------------ All Setup ------------------");
   printStringWithShift( (char*) nodeName, 50);
@@ -584,27 +584,28 @@ void loop()
   timeinfo = localtime (&tnow);
 
 
-  bool readVal = MPR121.digitalRead(10); // read E10
-
-  MPR121.digitalWrite(11, !readVal);     // write the inverse to E11
-
-
+#if USE_GPIO0
+  // Leave here until other MPR121s arrive (for dev)
   // Check for a button press, display external weather in a blocking call
   if ( displayWeatherButton( ) ) {
     printStringWithShift( displayOutsideWeather( timeBuf ), 50 ); delay( 1 * 1000 );
     printStringWithShift( displayOutsideForecast( timeBuf ), 50 ); delay( 1 * 1000 );
   }
-
-  if ( mcp.digitalRead(mcpOWMButton) == 0 ) {     // Active low
-    mcp.digitalWrite( 7, HIGH );
+#else
+  bool readVal = MPR121.digitalRead(mprButton);
+  MPR121.digitalWrite(mprLED, !readVal);     // write the inverse to mprLED
+  if ( !readVal ) {
     printStringWithShift( displayOutsideWeather( timeBuf ), 50 ); delay( 1 * 1000 );
     printStringWithShift( displayOutsideForecast( timeBuf ), 50 ); delay( 1 * 1000 );
   }
 
   MPR121.updateTouchData();
-  if ( MPR121.isNewTouch(0) == 1 ) {
-    Serial.print( "TOUCHED!!  " ); Serial.print( "MPR121.isNewTouch(0): " ); Serial.println( MPR121.isNewTouch(0) );
+  if ( MPR121.isNewTouch(mprSense) == 1 ) {
+    Serial.print( "TOUCHED!!  " ); Serial.print( "MPR121.isNewTouch(mprSense): " ); 
+    Serial.println( MPR121.isNewTouch(mprSense) );
+    printStringWithShift( (char*) F("Sensed touch!"), 50 ); delay( 500 );
   }
+#endif
 
   // localtime / gmtime every second change
   static time_t lastv = 0;
@@ -643,7 +644,9 @@ void loop()
     if ( tv.tv_sec % tempPubInterval == 0 )
     {
       printValues( timeBuf ); // Get BME stats
+#if USE_MQTT      
       client.publish(tempTopic, timeBuf);
+#endif      
       strcat( timeBuf, "^F" );
       printString(timeBuf);
       printTempFlag = true;
@@ -672,11 +675,14 @@ void loop()
     Serial.printf("heap size: %u\n", ESP.getFreeHeap());
   }
 
+#if USE_MQTT
   // Service MQTT often, but after the timed work
   if (!client.connected()) {
     reconnect();
   }
   client.loop();
+#endif
+  
   wServer.handleClient();                    // checks for incoming HTTP messages
   MDNS.update();
   ArduinoOTA.handle();
@@ -688,7 +694,6 @@ void loop()
   } else
     textOn = "time";
 
-  mcp.digitalWrite( 7, LOW );
 }
 
 
@@ -1069,6 +1074,7 @@ void oneDayFcast(void) {
   byte entries = owF1.updateForecast(location, ow_fcast1, OWMDays, ow_key, "us", "McMurray", "imperial");
   Serial.print("Entries: "); Serial.println(entries + 1);
   for (byte i = 0; i < 2; i++) {    // Only copy two rows, today and tomorrow
+    // if ( the first element is yesterday )   then   skip it and process the next two   
     Serial.print(dateTime(ow_fcast1[i].dt) + ": icon: ");
     Serial.print(ow_fcast1[i].icon + ", temp.: [" + ow_fcast1[i].t_min + ", " + ow_fcast1[i].t_max + "], press.: " + ow_fcast1[i].pressure);
     Serial.println(", descr.: " + ow_fcast1[i].description + ":: " + ow_fcast1[i].main);

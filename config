@@ -18,3 +18,7 @@ const char* mqtt_server = "korpi.local";
 const int  tempPubInterval = 30;
 const char *ow_key      = "your OWM key";
 const char *servername = "api.openweathermap.org";
+
+#define USE_GPIO0 1
+#define USE_MQTT 1
+#define NUM_LEDS    22
