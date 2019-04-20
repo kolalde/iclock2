@@ -168,11 +168,11 @@ void setupMPR121() {
 
   // this is the touch threshold - setting it low makes it more like a proximity trigger
   // default value is 40 for touch
-  MPR121.setTouchThreshold(80);
+  MPR121.setTouchThreshold(40);
   
   // this is the release threshold - must ALWAYS be smaller than the touch threshold
   // default value is 20 for touch
-  MPR121.setReleaseThreshold(40);  
+  MPR121.setReleaseThreshold(20);  
 
   // initial data update
   MPR121.updateTouchData();
@@ -390,18 +390,20 @@ bool isLight() {
   sensorValue = analogRead(sensorPin);
   Serial.println(sensorValue); //prints the values coming from the sensor on the screen
 
-  if (sensorValue < lightThresh - 20)       //setting a threshold value
+  if (sensorValue < lightThresh - 80)       //setting a threshold value
   {
     Serial.println("It is light");
     oldIsLight = 15;
     return true;
   }
-  if (sensorValue > lightThresh + 20)       //setting a threshold value
+  if (sensorValue > lightThresh + 80)       //setting a threshold value
   {
     Serial.println("It is dark");
     oldIsLight = 0;
     return false;
   }
+
+  return (oldIsLight == 15) ? true : false;
 }
 
 
@@ -603,7 +605,8 @@ void loop()
   if ( MPR121.isNewTouch(mprSense) == 1 ) {
     Serial.print( "TOUCHED!!  " ); Serial.print( "MPR121.isNewTouch(mprSense): " ); 
     Serial.println( MPR121.isNewTouch(mprSense) );
-    printStringWithShift( (char*) F("Sensed touch!"), 50 ); delay( 500 );
+    setRandomColor();
+    //printStringWithShift( (char*) F("Sensed touch!"), 50 ); delay( 500 );
   }
 #endif
 
@@ -641,8 +644,13 @@ void loop()
     //
     // Get and print the indoor temp every tempPubInterval seconds
     //
+    // AND REINIT THE MAX display, it BROKE
     if ( tv.tv_sec % tempPubInterval == 0 )
     {
+      delete mx;                                      // delete the old corrupt registers, and RELEASE MEMORY
+      MD_MAX72XX *mx = new MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
+      initMDLib();                                    // re-init and back to where it was
+
       printValues( timeBuf ); // Get BME stats
 #if USE_MQTT      
       client.publish(tempTopic, timeBuf);
@@ -825,6 +833,16 @@ void setLedColor( char* color, int brightness) {
   Serial.print("Color set: "); Serial.println(color);
 }
 
+void setRandomColor () {
+  uint32_t colors[] = { CRGB::Red, CRGB::Green, CRGB::Blue, CRGB::Purple, CRGB::White, CRGB::Yellow };
+
+  for (int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = colors[random(0, 7)];
+  }
+  FastLED.show();
+  Serial.print("Radnom color set");
+}
+
 
 //
 //   Convert floating to character string, without using String
@@ -987,7 +1005,7 @@ void handle_msgAdmin()  {
       
     wServer.send(200, "text/html", sendPage.c_str() );
 
-    t_httpUpdate_return ret = ESPhttpUpdate.update(OTAclient, "http://192.168.1.225/file.bin");
+    t_httpUpdate_return ret = ESPhttpUpdate.update(OTAclient, UpdateLocation);
     // Or:
     //t_httpUpdate_return ret = ESPhttpUpdate.update(OTAclient, "server", 80, "file.bin");
 
@@ -1047,7 +1065,7 @@ char* displayOutsideWeather( char* timeBuf) {
 
 void currentConditions(void) {
   OWM_conditions *ow_cond = new OWM_conditions;
-  owCC.updateConditions(ow_cond, ow_key, "us", "McMurray", "imperial");
+  owCC.updateConditions(ow_cond, ow_key, "us", owmCity, "imperial");
   Serial.print("Latitude & Longtitude: ");
   Serial.print("<" + ow_cond->longtitude + " " + ow_cond->latitude + "> @" + dateTime(ow_cond->dt) + ": ");
   Serial.println("icon: " + ow_cond->icon + ", " + " temp.: " + ow_cond->temp + ", press.: " + ow_cond->pressure +
@@ -1127,5 +1145,5 @@ void printValues( char * tBuff ) {
   Serial.print(bme.readHumidity());
   Serial.println(" %");
 
-  tBuff =  ftoa(tBuff, round(bme.readTemperature() * 9 / 5 + 32), 0);
+  tBuff =  ftoa(tBuff, (round(bme.readTemperature() * 9 / 5 + 32)) - tempAdjust, 0);
 }

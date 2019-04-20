@@ -18,7 +18,10 @@ const char* mqtt_server = "korpi.local";
 const int  tempPubInterval = 30;
 const char *ow_key      = "your OWM key";
 const char *servername = "api.openweathermap.org";
+const char *owmCity = "McMurray";
+const char *UpdateLocation = "http://your.location/your.ino.bin"
+const float tempAdjust = 0;
 
-#define USE_GPIO0 1
-#define USE_MQTT 1
+#define USE_GPIO0 0
+#define USE_MQTT 0
 #define NUM_LEDS    22
