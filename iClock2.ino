@@ -45,6 +45,7 @@ OWMfiveForecast    owF5;
 OWMoneForecast    owF1;
 Ticker getOWM;
 Ticker displayTempTicker;
+Ticker displayOffTicker;
 bool getOWMNow = true;
 WiFiClient  tsClient;
 
@@ -57,6 +58,8 @@ String intensity = "0";
 String ledStrip_intensity = "10";
 String sColor = "Purple";
 char auto_brightness[5] = "On";
+char display_off[5] = "Off";
+char display_off_save[5] = "Off";
 bool printTempFlag = false;
 
 // Other runtime stuff
@@ -73,6 +76,11 @@ char bootTime[30];
 // Used to display the temp for 3 seconds
 void printTempCountDown() {
   printTempFlag = false;
+}
+
+// Used to restore the display_off state
+void displayOffCountDown() {
+  strcpy( display_off, display_off_save );
 }
 
 bool toggleOWM() {
@@ -585,6 +593,9 @@ void loop()
   struct tm * timeinfo;
   timeinfo = localtime (&tnow);
 
+  // Don't use the display if not wanted
+  if ( !isDisplayOn() )
+    mx->clear();
 
 #if USE_GPIO0
   // Leave here until other MPR121s arrive (for dev)
@@ -602,10 +613,14 @@ void loop()
   }
 
   MPR121.updateTouchData();
-  if ( MPR121.isNewTouch(mprSense) == 1 ) {
+  if ( MPR121.isNewTouch(mprSense) == 1 ) {             // always display on button press
     Serial.print( "TOUCHED!!  " ); Serial.print( "MPR121.isNewTouch(mprSense): " ); 
     Serial.println( MPR121.isNewTouch(mprSense) );
     setRandomColor();
+
+    strcpy( display_off, "Off" );                              // allow for displaying things
+    displayOffTicker.attach( 30, displayOffCountDown );         //   then revert in 30 seconds
+    
     //printStringWithShift( (char*) F("Sensed touch!"), 50 ); delay( 500 );
   }
 #endif
@@ -628,7 +643,7 @@ void loop()
       if ( *timeBuf == '0' )
         *timeBuf = ' ';         // replace leading 0 with a space
       Serial.println(timeBuf);
-      printString(timeBuf);
+      if (isDisplayOn()) printString(timeBuf);
     }
 
     //
@@ -656,7 +671,7 @@ void loop()
       client.publish(tempTopic, timeBuf);
 #endif      
       strcat( timeBuf, "^F" );
-      printString(timeBuf);
+      if (isDisplayOn()) printString(timeBuf);
       printTempFlag = true;
       displayTempTicker.attach( 3, printTempCountDown );
 
@@ -704,6 +719,13 @@ void loop()
 
 }
 
+
+bool isDisplayOn() {
+  if ( strcmp(display_off, "On") != 0 ) {      // they want the display on
+    return true;
+  }
+  return false;
+}
 
 void initMDLib()
 {
@@ -919,6 +941,12 @@ void handle_msg()  {
   strcpy( auto_brightness, wServer.arg("auto_brightness").c_str() );
   Serial.print("auto_brightness: "); Serial.println(auto_brightness);
 
+  strcpy( display_off, wServer.arg("display_off").c_str() );
+  strcpy( display_off_save, display_off );
+  Serial.print("display_off: "); Serial.println(display_off);
+  if ( strcmp( display_off, "On" ) == 0 )
+    mx->clear();                         // Initial clear needed to well, clear
+
   ledStrip_intensity = wServer.arg("ledStrip_intensity");
   if ( ledStrip_intensity.length() == 0 ) {
     ledStrip_intensity = "10";
@@ -961,6 +989,11 @@ String setForm( ) {
     "Enable auto_brightness control"
     "<input type='checkbox' name='auto_brightness' size=3 value='On'" +
     (strcmp(auto_brightness, "On") == 0 ? "checked" : "")  + "><br>"
+    "<br>"
+    "Turn off obnoxious display"
+    "<input type='checkbox' name='display_off' size=3 value='On'" +
+    (strcmp(display_off, "On") == 0 ? "checked" : "")  + "><br>"
+    "<br>"
     "Set LED RGB color"
     "<select name=sColor>"
     "<option selected='selected'>" + sColor + "</option>"
