@@ -266,7 +266,7 @@ void setupOTA() {
 #define CS_PIN    12  // or SS
 #define DATA_PIN  13  // or MOSI
 // SPI hardware interface (for SCK and MOSI)
-MD_MAX72XX *mx = new MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
+MD_MAX72XX *mx = new MD_MAX72XX(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
 
 
 ////////////////////////////////////////////////////////
@@ -662,9 +662,9 @@ void loop()
     // AND REINIT THE MAX display, it BROKE
     if ( tv.tv_sec % tempPubInterval == 0 )
     {
-      delete mx;                                      // delete the old corrupt registers, and RELEASE MEMORY
-      MD_MAX72XX *mx = new MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
-      initMDLib();                                    // re-init and back to where it was
+//      delete mx;                                      // delete the old corrupt registers, and RELEASE MEMORY
+//      MD_MAX72XX *mx = new MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
+//      initMDLib();                                    // re-init and back to where it was
 
       printValues( timeBuf ); // Get BME stats
 #if USE_MQTT      
@@ -774,6 +774,10 @@ void printText(uint8_t modStart, uint8_t modEnd, char *pMsg)
   uint8_t   cBuf[8];
   int16_t   col = ((modEnd + 1) * COL_SIZE) - 1;
 
+//  mx->control(MD_MAX72XX::TEST, MD_MAX72XX::OFF);                   // no test
+//  mx->control(MD_MAX72XX::SCANLIMIT, 7);                            // scan limit is set to max on startup
+//  mx->control(MD_MAX72XX::DECODE, MD_MAX72XX::OFF);                 // ensure no decoding (warm boot potential issue)
+  
   mx->control(modStart, modEnd, MD_MAX72XX::UPDATE, MD_MAX72XX::OFF);
 
   do     // finite state machine to print the characters in the space available
