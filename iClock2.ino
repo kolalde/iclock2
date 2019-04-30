@@ -37,6 +37,8 @@
 #include <Adafruit_Sensor.h>            // Sensor.h required by the BME280 lib
 #include <Adafruit_BME280.h>
 #include <MPR121.h>
+#include <ArduinoJson.h>
+#include "FS.h"
 
 #include "sys_var_single.h"
 
@@ -60,7 +62,13 @@ String sColor = "Purple";
 char auto_brightness[5] = "On";
 char display_off[5] = "Off";
 char display_off_save[5] = "Off";
+char display_day_night_off[5] = "Off";
+char display_day_night_off_save[5] = "Off";
+String display_off_hour = "23";
+String display_on_hour = "6";
 bool printTempFlag = false;
+const char *filename = "/config.txt";                    // <- SPIFFS filename
+
 
 // Other runtime stuff
 // for testing purpose:
@@ -73,6 +81,110 @@ char timeBuf[100];
 
 char bootTime[30];
 
+////////////////////////////////////////////////////////
+//
+// JSON save and load routines
+//
+/*
+{
+  "intensity":"0",
+  "auto_brightness": "On",
+  "ledStrip_intensity": "10",
+  "sColor": "Purple",
+  "display_day_night_off":"Off",
+  "display_off_hour":"23",
+  "display_on_hour":"6",
+  "display_off":"Off"
+}
+*/
+// Use arduinojson.org/assistant to compute the capacity.
+bool jsonLoad() {
+  
+  File configFile = SPIFFS.open("config.json", "r");
+  if (!configFile) {
+    Serial.println("Failed to open config file.  Factory fresh?");
+    return false;
+  }
+  Serial.println("Opened config file.");
+
+  size_t size = configFile.size();
+  if (size > 1024) {
+    Serial.println("Config file size is too large");
+  }
+
+  const size_t capacity = JSON_OBJECT_SIZE(8) + 170;
+  DynamicJsonDocument doc(capacity); 
+  Serial.println("Allocated JsonDocument.");
+  
+  // Deserialize the JSON document
+  DeserializationError error = deserializeJson(doc, configFile);
+  if (error)
+    Serial.println(F("Failed to read file, using default configuration"));
+  Serial.println("Deserialized.");
+
+  intensity = (doc["intensity"]) != NULL ? doc["intensity"].as<String>() : "0";
+  strcpy(auto_brightness, doc["auto_brightness"].as<char*>() );
+  ledStrip_intensity = doc["ledStrip_intensity"].as<String>(); // "10"
+  sColor = doc["sColor"].as<String>(); // "Purple"
+  strcpy( display_day_night_off, doc["display_day_night_off"].as<char*>() ); // "Off"
+  display_off_hour = doc["display_off_hour"].as<String>(); // "23"
+  display_on_hour = doc["display_on_hour"].as<String>(); // "6"  
+Serial.print("display_off: "); Serial.println( (const char*)doc["display_off"] );
+Serial.print("display_off: "); Serial.println( doc["display_off"].as<char*>() );
+  strcpy( display_off, (doc["display_off"].as<char*>() != NULL) ? doc["display_off"].as<char*>() : "Off"); // "Off"
+
+  Serial.println("Loaded config file");
+  Serial.print("intensity: "); Serial.println( intensity );
+  Serial.print("auto_brightness: "); Serial.println( auto_brightness );
+  Serial.print("ledStrip_intensity: "); Serial.println( ledStrip_intensity );
+  Serial.print("sColor: "); Serial.println( sColor );
+  Serial.print("display_day_night_off: "); Serial.println( display_day_night_off );
+  Serial.print("display_off_hour: "); Serial.println( display_off_hour );
+  Serial.print("display_on_hour: "); Serial.println( display_on_hour );
+  Serial.print("display_off: "); Serial.println( display_off );
+
+  configFile.close();
+  return true;
+}
+
+
+bool jsonSave() {
+  const size_t capacity = JSON_OBJECT_SIZE(8) + 170;
+  DynamicJsonDocument doc(capacity);
+  
+  doc["intensity"] = intensity;
+  doc["auto_brightness"] = (const char*)auto_brightness;
+  doc["ledStrip_intensity"] = ledStrip_intensity;
+  doc["sColor"] = sColor;
+  doc["display_day_night_off"] = (const char*)display_day_night_off;
+  doc["display_off_hour"] = display_off_hour;
+  doc["display_on_hour"] = display_on_hour;
+  doc["display_off"] = (const char*)display_off;
+
+  File configFile = SPIFFS.open("config.json", "w");
+  if (!configFile) {
+    Serial.println("Failed to open config file for writing");
+    return false;
+  }
+
+  Serial.println("\nWriting to config file");
+  Serial.print("intensity: "); Serial.println( doc["intensity"].as<String>() );
+  Serial.print("auto_brightness: "); Serial.println( (const char*)doc["auto_brightness"] );
+  Serial.print("ledStrip_intensity: "); Serial.println( doc["ledStrip_intensity"].as<String>() );
+  Serial.print("sColor: "); Serial.println( doc["sColor"].as<String>() );
+  Serial.print("display_day_night_off: "); Serial.println( (const char*)doc["display_day_night_off"] );
+  Serial.print("display_off_hour: "); Serial.println( (const char*)doc["display_off_hour"] );
+  Serial.print("display_on_hour: "); Serial.println( (const char*)doc["display_on_hour"] );
+  Serial.print("display_off: "); Serial.println( (const char*)doc["display_off"] );
+
+  if (serializeJson(doc, configFile) == 0)
+    Serial.println(F("Failed to write to file"));
+
+  configFile.close();
+  return true;
+}
+
+
 // Used to display the temp for 3 seconds
 void printTempCountDown() {
   printTempFlag = false;
@@ -81,11 +193,36 @@ void printTempCountDown() {
 // Used to restore the display_off state
 void displayOffCountDown() {
   strcpy( display_off, display_off_save );
+  strcpy( display_day_night_off, display_day_night_off_save );
 }
 
 bool toggleOWM() {
   getOWMNow = getOWMNow ? false : true;
   return getOWMNow;
+}
+
+
+// Retrun TRUE if we are within the OFF hours AND
+//   display_day_night_off control is enabled
+bool display_off_hours() {
+  time_t now;
+  struct tm * timeinfo;
+  time(&now);
+  timeinfo = localtime(&now);
+  
+//  Serial.println("display_off_hour: " + display_off_hour);
+//  Serial.println("display_on_hour: " + display_on_hour);
+//  Serial.print("display_day_night_off: "); Serial.println(display_day_night_off);
+//  Serial.print("Curent hour: " ); Serial.println(timeinfo->tm_hour);
+
+  if ( ((timeinfo->tm_hour >= display_off_hour.toInt()) || (timeinfo->tm_hour <= display_on_hour.toInt())) &&
+    strcmp( display_day_night_off, "On" ) == 0) {
+//      Serial.println("Within day/night OFF hours, and control enabled");  
+      return true;
+    }
+
+//  Serial.println("Not within day/night OFF hours, or control disabled");  
+  return false;
 }
 
 
@@ -215,7 +352,7 @@ void setupOTA() {
 
     // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
     Serial.println("Start updating " + type);
-    printString("OTA");
+    if (isDisplayOn()) printString("OTA");
   });
   ArduinoOTA.onEnd([]() {
     Serial.println("\nEnd");
@@ -292,14 +429,14 @@ CRGB leds[NUM_LEDS];
 // Initial wifi setup, portal
 void setupWifi() {
   // turn on WIFI using stored SSID/PWD or captive portal
-  printString("Setup");
+  if (isDisplayOn()) printString("Setup");
   WiFiManager wifiManager;
   wifiManager.autoConnect( nodeName );
   Serial.println("\nWiFi connected");
   Serial.print("Connected: "); Serial.println(WiFi.SSID());
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
-  printStringWithShift( (char*)WiFi.SSID().c_str(), 50 );
+  if (isDisplayOn()) printStringWithShift( (char*)WiFi.SSID().c_str(), 50 );
 }
 
 
@@ -329,7 +466,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   // Quick message for testing
   if ((char)payload[0] == '1') {
-    printString( "Got 1" );
+    if (isDisplayOn()) printString( "Got 1" );
     delay(100);
   }
 }
@@ -396,17 +533,17 @@ static int oldIsLight = 0;
 bool isLight() {
   // read the value from the sensor:
   sensorValue = analogRead(sensorPin);
-  Serial.println(sensorValue); //prints the values coming from the sensor on the screen
+//  Serial.println(sensorValue); //prints the values coming from the sensor on the screen
 
   if (sensorValue < lightThresh - 80)       //setting a threshold value
   {
-    Serial.println("It is light");
+//    Serial.println("It is light");
     oldIsLight = 15;
     return true;
   }
   if (sensorValue > lightThresh + 80)       //setting a threshold value
   {
-    Serial.println("It is dark");
+//    Serial.println("It is dark");
     oldIsLight = 0;
     return false;
   }
@@ -432,7 +569,7 @@ void webServerSetup() {
     }
   }
   Serial.println("mDNS responder started");
-  printString("mDNS");
+  if (isDisplayOn()) printString("mDNS");
 
   // Set up the endpoints for HTTP server,  Endpoints can be written as inline functions:
   wServer.on("/", []()
@@ -452,13 +589,13 @@ void webServerSetup() {
 }
 
 
-////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // S E T U P
 //
-////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void setup() {
   const char compile_date[] = __DATE__ " " __TIME__ " " __FILE__;
   Serial.begin(115200); delay(50);
@@ -467,13 +604,25 @@ void setup() {
   Serial.println(" *****");
   Serial.println( compile_date );
 
+  Serial.println("---------- Loading config file from SPIFFS -----------");
+  if (!SPIFFS.begin()) {
+    Serial.println("Failed to mount file system");
+    return;
+  }
+  
+  if ( !jsonLoad() ) {
+    Serial.println("We couldn't load existing, create a new one in SETUP");
+    if ( !jsonSave() )               //  We couldn't load existing, create a new one
+      Serial.println("We couldn't save a new config file in SETUP");
+  }
+  
   Serial.println("---------- Init and clear the MAX7219 -----------");
   initMDLib();
 
   Serial.println("----------- Init and clear the WS2812s ----------");
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection( TypicalLEDStrip );
-  setLedColor("Purple", BRIGHTNESS);
-  setLedColor("Purple", BRIGHTNESS);
+  setLedColor((char*)sColor.c_str(), ledStrip_intensity.toInt());
+  setLedColor((char*)sColor.c_str(), ledStrip_intensity.toInt());
 
   Serial.println("------------------ Init WiFi --------------------");
   setupWifi();
@@ -481,7 +630,7 @@ void setup() {
 #if USE_MQTT
   Serial.println("------------------ Init MQTT --------------------");
   //setupMQTT();
-  printString( (char*) F("MQTT") );
+  if (isDisplayOn()) printString( (char*) F("MQTT") );
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
   reconnect();
@@ -492,7 +641,7 @@ void setup() {
   Serial.println("------------ Init NTP, TZ, and DST -------------");
   // set function to call when time is set
   // is called by NTP code when NTP is used
-  printString( (char*) F("Time") );
+  if (isDisplayOn()) printString( (char*) F("Time") );
   settimeofday_cb(time_is_set);
 
   time_t rtc_time_t = 1541267183;         // fake RTC time for now and TZ
@@ -512,7 +661,7 @@ void setup() {
 
   Serial.println("----------------- Init BME280 ------------------");
   // Check for and get indoor temp, and other BME data
-  printString( (char*) F("Temp") );
+  if (isDisplayOn()) printString( (char*) F("Temp") );
   if ( !bme.begin() ) {
       Serial.print("Could not find a valid BME280 sensor, check wiring: ");
       Serial.println( bme.begin() );   
@@ -520,12 +669,12 @@ void setup() {
   delay( 200 );
   
   Serial.println("------------------ WebServer ------------------");
-  printString( (char*) F("HTTP") );
+  if (isDisplayOn()) printString( (char*) F("HTTP") );
   delay( 200 );
   webServerSetup();
 
   Serial.println("--------------------- OTA ---------------------");
-  printString( (char*) F("OTA") );
+  if (isDisplayOn()) printString( (char*) F("OTA") );
   delay( 200 );
   strcpy( timeBuf, "No OWM data");
   setupOTA();
@@ -533,7 +682,7 @@ void setup() {
   Serial.println("------------------ Setup OpenWeatherMap OWM ---------------");
   Serial.println("Current Conditions: ");
 
-  printString( (char*) F("OWM") );
+  if (isDisplayOn()) printString( (char*) F("OWM") );
   delay( 200 );
   currentConditions();
   Serial.println("One day forecast: ");
@@ -547,14 +696,14 @@ void setup() {
   while ( cbtime_set < 2 ) {
     Serial.println("Waiting for settimeofday() to be called");
     sprintf(printBuf, "T%d", x++);
-    printString(printBuf);
+    if (isDisplayOn()) printString(printBuf);
     delay(500);
     if ( x > 20 )             // This will eventually settle, this is quicker
       ESP.reset();
   }
 
   Serial.println("--------------------- MPR ---------------------");
-  printString( (char*) F("MPR") );
+  if (isDisplayOn()) printString( (char*) F("MPR") );
   delay( 200 );
   setupMPR121();
   
@@ -571,7 +720,7 @@ void setup() {
   ThingSpeak.begin(tsClient);  // Initialize ThingSpeak
 
   Serial.println("------------------ All Setup ------------------");
-  printStringWithShift( (char*) nodeName, 50);
+  if (isDisplayOn()) printStringWithShift( (char*) nodeName, 50);
   delay(300);
 }
 
@@ -619,6 +768,7 @@ void loop()
     setRandomColor();
 
     strcpy( display_off, "Off" );                              // allow for displaying things
+    strcpy( display_day_night_off, "Off" );                    // allow for DAY/NIGHT displaying things
     displayOffTicker.attach( 30, displayOffCountDown );         //   then revert in 30 seconds
     
     //printStringWithShift( (char*) F("Sensed touch!"), 50 ); delay( 500 );
@@ -635,7 +785,7 @@ void loop()
     // Get and print the time
     //
     Serial.println();
-    printf(" local asctime: %s", asctime(localtime(&tnow))); // print formated local time
+//    printf(" local asctime: %s", asctime(localtime(&tnow))); // print formated local time
 
     // Usually display the time, every tempPubInterval display the temp for 3s
     if  ( !printTempFlag ) {
@@ -659,13 +809,8 @@ void loop()
     //
     // Get and print the indoor temp every tempPubInterval seconds
     //
-    // AND REINIT THE MAX display, it BROKE
     if ( tv.tv_sec % tempPubInterval == 0 )
     {
-//      delete mx;                                      // delete the old corrupt registers, and RELEASE MEMORY
-//      MD_MAX72XX *mx = new MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
-//      initMDLib();                                    // re-init and back to where it was
-
       printValues( timeBuf ); // Get BME stats
 #if USE_MQTT      
       client.publish(tempTopic, timeBuf);
@@ -721,17 +866,21 @@ void loop()
 
 
 bool isDisplayOn() {
-  if ( strcmp(display_off, "On") != 0 ) {      // they want the display on
-    return true;
+  if ( strcmp(display_off, "On") == 0 ) {      // they want the display off
+    return false;
   }
-  return false;
+
+  if ( display_off_hours() ) 
+    return false;                      // we're in the night off hours, and they've enabled that control
+    
+  return true;
 }
 
 void initMDLib()
 {
   mx->begin();
   // module initialize
-  mx->control(MD_MAX72XX::INTENSITY, oldIsLight ); // dot matix intensity 0-15
+  mx->control(MD_MAX72XX::INTENSITY, (byte)intensity.toInt() ); // dot matix intensity 0-15
   mx->setFont( _sys_var_single );
 }
 
@@ -951,6 +1100,19 @@ void handle_msg()  {
   if ( strcmp( display_off, "On" ) == 0 )
     mx->clear();                         // Initial clear needed to well, clear
 
+  display_off_hour = wServer.arg("display_off_hour");
+  Serial.print("display_off_hour: "); Serial.println(display_off_hour);
+  
+  display_on_hour = wServer.arg("display_on_hour");
+  Serial.print("display_on_hour: "); Serial.println(display_on_hour);
+  
+  strcpy( display_day_night_off, wServer.arg("display_day_night_off").c_str() );
+  strcpy( display_day_night_off_save, display_day_night_off );
+  Serial.print("display_day_night_off: "); Serial.println(display_day_night_off);
+  if ( strcmp( display_day_night_off, "On" ) == 0  && display_off_hours() )   {
+    mx->clear();                         // Initial clear needed to well, clear
+  }
+
   ledStrip_intensity = wServer.arg("ledStrip_intensity");
   if ( ledStrip_intensity.length() == 0 ) {
     ledStrip_intensity = "10";
@@ -963,6 +1125,7 @@ void handle_msg()  {
     Serial.print("sColor: "); Serial.println(sColor);
     setLedColor( (char*)sColor.c_str(), ledStrip_intensity.toInt() );
   }
+  jsonSave();
   wServer.send(200, "text/html", setForm() ); // Same page with selections now set
 }
 
@@ -976,11 +1139,6 @@ String setForm( ) {
     "<head> <meta name='viewport' content='width=device-width'></head>"
     "<center>"
     "<img src='http://www.olalde.org/Comp_TOL_Fam.png'><br>"
-    "<b>Current text: " + displayText + "</b><br>"
-    "<b>Current displaying: " + textOn + "</b><br>"
-    "<b>Current intensity: " + intensity + "</b><br>"
-    "<b>Current color: " + sColor + "</b><br>"
-    "<b>Current led intensity: " + ledStrip_intensity + "</b>"
     "<form action='msg'><p>Set text and display option<br>"
     "<input type='text' name='msg' size=20 value='" + displayText + "'><br>"
     "<input type='radio' name='textOn' value='text' " +
@@ -997,6 +1155,16 @@ String setForm( ) {
     "Turn off obnoxious display"
     "<input type='checkbox' name='display_off' size=3 value='On'" +
     (strcmp(display_off, "On") == 0 ? "checked" : "")  + "><br>"
+    
+    "Disable display after Hour (0-23)"
+    "<input type='text' name='display_off_hour' size=3 value='" + display_off_hour + "'><br>"
+    
+    "Enable display after Hour (0-23)"
+    "<input type='text' name='display_on_hour' size=3 value='" + display_on_hour + "'><br>"
+    
+    "Enable display ON/OFF for Day/Night"
+    "<input type='checkbox' name='display_day_night_off' size=3 value='On'" +
+    (strcmp(display_day_night_off, "On") == 0 ? "checked" : "")  + "><br>"
     "<br>"
     "Set LED RGB color"
     "<select name=sColor>"
@@ -1014,6 +1182,7 @@ String setForm( ) {
     "</center>"
     "</body>"
     "</html>"   ;
+
   return form;
 }
 
@@ -1182,5 +1351,5 @@ void printValues( char * tBuff ) {
   Serial.print(bme.readHumidity());
   Serial.println(" %");
 
-  tBuff =  ftoa(tBuff, (round(bme.readTemperature() * 9 / 5 + 32)) - tempAdjust, 0);
+  tBuff =  ftoa(tBuff, (round((bme.readTemperature() * 9) / 5 + 32 - tempAdjust)) , 0);
 }
