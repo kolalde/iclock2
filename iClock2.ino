@@ -60,12 +60,17 @@ String intensity = "0";
 String ledStrip_intensity = "10";
 String sColor = "Purple";
 char auto_brightness[5] = "On";
-char display_off[5] = "Off";
-char display_off_save[5] = "Off";
-char display_day_night_off[5] = "Off";
-char display_day_night_off_save[5] = "Off";
+
+												// All 'controls' are persisted  (and display_day_night_state, for boot)
+char display_control[5] = "On";                          // is the control checked or not
+char display_day_night_control[5] = "Off";               // is the control checked or not
+bool display_day_night_state = false;                    // are we in the day/night/Off state?
+                                                         //    needed since we can't calc day_night at boot
+bool temp_display_state_on = false;                      // should be off, but button press caused On
+                                                         //    Timer turns off again
 String display_off_hour = "23";
 String display_on_hour = "6";
+
 bool printTempFlag = false;
 const char *filename = "/config.txt";                    // <- SPIFFS filename
 
@@ -91,10 +96,12 @@ char bootTime[30];
   "auto_brightness": "On",
   "ledStrip_intensity": "10",
   "sColor": "Purple",
-  "display_day_night_off":"Off",
+  "display_day_night_control":"Off",
+  "display_day_night_state":false,
+  "temp_display_state_on":false,
   "display_off_hour":"23",
   "display_on_hour":"6",
-  "display_off":"Off"
+  "display_control":"O"
 }
 */
 // Use arduinojson.org/assistant to compute the capacity.
@@ -112,7 +119,7 @@ bool jsonLoad() {
     Serial.println("Config file size is too large");
   }
 
-  const size_t capacity = JSON_OBJECT_SIZE(8) + 170;
+  const size_t capacity = JSON_OBJECT_SIZE(10) + 230;
   DynamicJsonDocument doc(capacity); 
   Serial.println("Allocated JsonDocument.");
   
@@ -122,26 +129,37 @@ bool jsonLoad() {
     Serial.println(F("Failed to read file, using default configuration"));
   Serial.println("Deserialized.");
 
-  intensity = (doc["intensity"]) != NULL ? doc["intensity"].as<String>() : "0";
+  intensity = (doc["intensity"].as<String>()) != NULL ? doc["intensity"].as<String>() : "0";
   strcpy(auto_brightness, doc["auto_brightness"].as<char*>() );
   ledStrip_intensity = doc["ledStrip_intensity"].as<String>(); // "10"
   sColor = doc["sColor"].as<String>(); // "Purple"
-  strcpy( display_day_night_off, doc["display_day_night_off"].as<char*>() ); // "Off"
+  strcpy( display_day_night_control, doc["display_day_night_control"].as<char*>() ); // "Off"
+  display_day_night_state = doc["display_day_night_state"].as<bool>();
   display_off_hour = doc["display_off_hour"].as<String>(); // "23"
   display_on_hour = doc["display_on_hour"].as<String>(); // "6"  
-Serial.print("display_off: "); Serial.println( (const char*)doc["display_off"] );
-Serial.print("display_off: "); Serial.println( doc["display_off"].as<char*>() );
-  strcpy( display_off, (doc["display_off"].as<char*>() != NULL) ? doc["display_off"].as<char*>() : "Off"); // "Off"
+  strcpy( display_control, (doc["display_control"].as<char*>() != NULL) ? doc["display_control"].as<char*>() : "On"); // "On"
+
+  // is the display master on or off - manual control context
+  // is the day/night on or off and what is the window  -  day/night context
+  // we don't care if we were in the middle of a temp-on for reboot, it doesn't persist.  The exception to that is a day/night
+  // window can't easily be calculated when we boot.  So we'll need a third off switch for that context
+  // Lastly there's the concept of control-state and current-state.  
+  // I want the display off  display_control[On|Off], but a button was pressed  temp_display_state[On|!On]
+  // I want the display off during a day/night window display_day_night_control[On|Off], display_off_hour[0-23], display_off_hour[0-23], 
+  //       but we're not in that window right now   not sure I need to track a state for this, it's calculated
+  // I want the display off for day/night   (same as above), but during boot I can't calculate the window    display_state[On|Off]
+   
 
   Serial.println("Loaded config file");
   Serial.print("intensity: "); Serial.println( intensity );
   Serial.print("auto_brightness: "); Serial.println( auto_brightness );
   Serial.print("ledStrip_intensity: "); Serial.println( ledStrip_intensity );
   Serial.print("sColor: "); Serial.println( sColor );
-  Serial.print("display_day_night_off: "); Serial.println( display_day_night_off );
+  Serial.print("display_day_night_control: "); Serial.println( display_day_night_control );
+  Serial.print("display_day_night_state: "); Serial.println( display_day_night_state );
   Serial.print("display_off_hour: "); Serial.println( display_off_hour );
   Serial.print("display_on_hour: "); Serial.println( display_on_hour );
-  Serial.print("display_off: "); Serial.println( display_off );
+  Serial.print("display_control: "); Serial.println( display_control );
 
   configFile.close();
   return true;
@@ -149,17 +167,19 @@ Serial.print("display_off: "); Serial.println( doc["display_off"].as<char*>() );
 
 
 bool jsonSave() {
-  const size_t capacity = JSON_OBJECT_SIZE(8) + 170;
+  const size_t capacity = JSON_OBJECT_SIZE(10) + 230;
   DynamicJsonDocument doc(capacity);
   
   doc["intensity"] = intensity;
   doc["auto_brightness"] = (const char*)auto_brightness;
   doc["ledStrip_intensity"] = ledStrip_intensity;
   doc["sColor"] = sColor;
-  doc["display_day_night_off"] = (const char*)display_day_night_off;
+  doc["display_control"] = (const char*)display_control;
+  doc["display_day_night_control"] = (const char*)display_day_night_control;
+  doc["display_day_night_state"] = display_day_night_state;
   doc["display_off_hour"] = display_off_hour;
   doc["display_on_hour"] = display_on_hour;
-  doc["display_off"] = (const char*)display_off;
+  doc["display_control"] = (const char*)display_control;
 
   File configFile = SPIFFS.open("config.json", "w");
   if (!configFile) {
@@ -172,10 +192,11 @@ bool jsonSave() {
   Serial.print("auto_brightness: "); Serial.println( (const char*)doc["auto_brightness"] );
   Serial.print("ledStrip_intensity: "); Serial.println( doc["ledStrip_intensity"].as<String>() );
   Serial.print("sColor: "); Serial.println( doc["sColor"].as<String>() );
-  Serial.print("display_day_night_off: "); Serial.println( (const char*)doc["display_day_night_off"] );
+  Serial.print("display_control: "); Serial.println( (const char*)doc["display_control"] );
+  Serial.print("display_day_night_control: "); Serial.println( (const char*)doc["display_day_night_control"] );
+  Serial.print("display_day_night_state: "); Serial.println( doc["display_day_night_state"].as<bool>() );
   Serial.print("display_off_hour: "); Serial.println( (const char*)doc["display_off_hour"] );
   Serial.print("display_on_hour: "); Serial.println( (const char*)doc["display_on_hour"] );
-  Serial.print("display_off: "); Serial.println( (const char*)doc["display_off"] );
 
   if (serializeJson(doc, configFile) == 0)
     Serial.println(F("Failed to write to file"));
@@ -190,10 +211,9 @@ void printTempCountDown() {
   printTempFlag = false;
 }
 
-// Used to restore the display_off state
+// Used to off temp_display_state_on state
 void displayOffCountDown() {
-  strcpy( display_off, display_off_save );
-  strcpy( display_day_night_off, display_day_night_off_save );
+  temp_display_state_on = false;
 }
 
 bool toggleOWM() {
@@ -203,7 +223,7 @@ bool toggleOWM() {
 
 
 // Retrun TRUE if we are within the OFF hours AND
-//   display_day_night_off control is enabled
+//   display_day_night_control is enabled
 bool display_off_hours() {
   time_t now;
   struct tm * timeinfo;
@@ -215,14 +235,17 @@ bool display_off_hours() {
 //  Serial.print("display_day_night_off: "); Serial.println(display_day_night_off);
 //  Serial.print("Curent hour: " ); Serial.println(timeinfo->tm_hour);
 
-  if ( ((timeinfo->tm_hour >= display_off_hour.toInt()) || (timeinfo->tm_hour <= display_on_hour.toInt())) &&
-    strcmp( display_day_night_off, "On" ) == 0) {
-//      Serial.println("Within day/night OFF hours, and control enabled");  
-      return true;
-    }
+  if ( strcmp( display_day_night_control, "On" ) != 0 )     // Make it easy, the control isn't set
+    return false;
 
-//  Serial.println("Not within day/night OFF hours, or control disabled");  
-  return false;
+  // We know they want the day/night control
+  if ( timeinfo->tm_hour == display_off_hour.toInt() )      //  and we're AT the off time
+    return true;
+
+  if ( timeinfo->tm_hour == display_on_hour.toInt() )        // and we're AT the On time  
+    return false;
+
+  return display_day_night_state;         // either inside or outside the edges, just return current state
 }
 
 
@@ -722,6 +745,9 @@ void setup() {
   Serial.println("------------------ All Setup ------------------");
   if (isDisplayOn()) printStringWithShift( (char*) nodeName, 50);
   delay(300);
+
+  // Done booting, reset display_day_night_state to off can calculate )
+  display_day_night_state = false;
 }
 
 
@@ -742,13 +768,24 @@ void loop()
   struct tm * timeinfo;
   timeinfo = localtime (&tnow);
 
-  // Don't use the display if not wanted
+  // Don't use the display if not wanted     STILL NEEDED??
   if ( !isDisplayOn() )
     mx->clear();
 
+  //
+  // Adjust display for brightness
+  //
+  if ( strcmp(auto_brightness, "On") == 0 ) {
+    if ( isLight()  == true )
+      mx->control(MD_MAX72XX::INTENSITY, 15);
+    if ( isLight() == false )
+      mx->control(MD_MAX72XX::INTENSITY, 0);
+  }
+      
 #if USE_GPIO0
   // Leave here until other MPR121s arrive (for dev)
   // Check for a button press, display external weather in a blocking call
+  // These printStringWithShift's are ALWAYS displayed since user requested
   if ( displayWeatherButton( ) ) {
     printStringWithShift( displayOutsideWeather( timeBuf ), 50 ); delay( 1 * 1000 );
     printStringWithShift( displayOutsideForecast( timeBuf ), 50 ); delay( 1 * 1000 );
@@ -767,11 +804,8 @@ void loop()
     Serial.println( MPR121.isNewTouch(mprSense) );
     setRandomColor();
 
-    strcpy( display_off, "Off" );                              // allow for displaying things
-    strcpy( display_day_night_off, "Off" );                    // allow for DAY/NIGHT displaying things
-    displayOffTicker.attach( 30, displayOffCountDown );         //   then revert in 30 seconds
-    
-    //printStringWithShift( (char*) F("Sensed touch!"), 50 ); delay( 500 );
+    temp_display_state_on = true;                               // allow for displaying things
+    displayOffTicker.attach( 30, displayOffCountDown );         //   then revert in 30 seconds    
   }
 #endif
 
@@ -785,7 +819,23 @@ void loop()
     // Get and print the time
     //
     Serial.println();
-//    printf(" local asctime: %s", asctime(localtime(&tnow))); // print formated local time
+
+    //
+    // First calc to see if we're within the day/night/off window
+    //
+    if ( display_off_hours() ) {
+      // Did we just transition into the On state
+      if ( display_day_night_state == false ) {      
+        display_day_night_state = true;                       // record new state
+        jsonSave();                                           
+      }
+    } else {
+      // Did we just transition into the Off state
+      if ( display_day_night_state == true ) {      
+        display_day_night_state = false;                       // record new state
+        jsonSave();                                           
+      }   
+    }
 
     // Usually display the time, every tempPubInterval display the temp for 3s
     if  ( !printTempFlag ) {
@@ -797,26 +847,16 @@ void loop()
     }
 
     //
-    // Adjust display for brightness
-    //
-    if ( strcmp(auto_brightness, "On") == 0 ) {
-      if ( isLight()  == true )
-        mx->control(MD_MAX72XX::INTENSITY, 15);
-      if ( isLight() == false )
-        mx->control(MD_MAX72XX::INTENSITY, 0);
-    }
-
-    //
     // Get and print the indoor temp every tempPubInterval seconds
     //
     if ( tv.tv_sec % tempPubInterval == 0 )
     {
-      printValues( timeBuf ); // Get BME stats
+      getBMEValues( timeBuf );             // Get BME stats
 #if USE_MQTT      
       client.publish(tempTopic, timeBuf);
 #endif      
       strcat( timeBuf, "^F" );
-      if (isDisplayOn()) printString(timeBuf);
+      if (isDisplayOn()) printString(timeBuf);           // reuse the timeBuf to print the Temp
       printTempFlag = true;
       displayTempTicker.attach( 3, printTempCountDown );
 
@@ -855,7 +895,7 @@ void loop()
   MDNS.update();
   ArduinoOTA.handle();
 
-  // Display text if requested
+  // Display text if requested             ALWAYS PRINT
   if ( textOn.equals("text") && displayTextTimes-- ) {
     printStringWithShift( (char*)displayText.c_str(), 50 );  // TODO Make non-blocking
     printStringWithShift( "   ", 50 );
@@ -866,7 +906,13 @@ void loop()
 
 
 bool isDisplayOn() {
-  if ( strcmp(display_off, "On") == 0 ) {      // they want the display off
+  if ( temp_display_state_on )
+    return true;                              // we're overriding to On for now
+
+  if ( display_day_night_state )                 // we're overriding to Off for boot
+    return false;
+    
+  if ( strcmp(display_control, "On") != 0 ) {      // they want the display off
     return false;
   }
 
@@ -1094,10 +1140,9 @@ void handle_msg()  {
   strcpy( auto_brightness, wServer.arg("auto_brightness").c_str() );
   Serial.print("auto_brightness: "); Serial.println(auto_brightness);
 
-  strcpy( display_off, wServer.arg("display_off").c_str() );
-  strcpy( display_off_save, display_off );
-  Serial.print("display_off: "); Serial.println(display_off);
-  if ( strcmp( display_off, "On" ) == 0 )
+  strcpy( display_control, wServer.arg("display_control").c_str() );
+  Serial.print("display_control: "); Serial.println(display_control);
+  if ( strcmp( display_control, "On" ) != 0 )
     mx->clear();                         // Initial clear needed to well, clear
 
   display_off_hour = wServer.arg("display_off_hour");
@@ -1106,10 +1151,9 @@ void handle_msg()  {
   display_on_hour = wServer.arg("display_on_hour");
   Serial.print("display_on_hour: "); Serial.println(display_on_hour);
   
-  strcpy( display_day_night_off, wServer.arg("display_day_night_off").c_str() );
-  strcpy( display_day_night_off_save, display_day_night_off );
-  Serial.print("display_day_night_off: "); Serial.println(display_day_night_off);
-  if ( strcmp( display_day_night_off, "On" ) == 0  && display_off_hours() )   {
+  strcpy( display_day_night_control, wServer.arg("display_day_night_control").c_str() );
+  Serial.print("display_day_night_control: "); Serial.println(display_day_night_control);
+  if ( strcmp( display_day_night_control, "On" ) == 0  && display_off_hours() )   {
     mx->clear();                         // Initial clear needed to well, clear
   }
 
@@ -1152,9 +1196,9 @@ String setForm( ) {
     "<input type='checkbox' name='auto_brightness' size=3 value='On'" +
     (strcmp(auto_brightness, "On") == 0 ? "checked" : "")  + "><br>"
     "<br>"
-    "Turn off obnoxious display"
-    "<input type='checkbox' name='display_off' size=3 value='On'" +
-    (strcmp(display_off, "On") == 0 ? "checked" : "")  + "><br>"
+    "Display On-checked or Off-not checked"
+    "<input type='checkbox' name='display_control' size=3 value='On'" +
+    (strcmp(display_control, "On") == 0 ? "checked" : "")  + "><br>"
     
     "Disable display after Hour (0-23)"
     "<input type='text' name='display_off_hour' size=3 value='" + display_off_hour + "'><br>"
@@ -1163,8 +1207,8 @@ String setForm( ) {
     "<input type='text' name='display_on_hour' size=3 value='" + display_on_hour + "'><br>"
     
     "Enable display ON/OFF for Day/Night"
-    "<input type='checkbox' name='display_day_night_off' size=3 value='On'" +
-    (strcmp(display_day_night_off, "On") == 0 ? "checked" : "")  + "><br>"
+    "<input type='checkbox' name='display_day_night_control' size=3 value='On'" +
+    (strcmp(display_day_night_control, "On") == 0 ? "checked" : "")  + "><br>"
     "<br>"
     "Set LED RGB color"
     "<select name=sColor>"
@@ -1331,7 +1375,7 @@ void fiveDayFcast(void) {
 // 
 //  BME280
 //
-void printValues( char * tBuff ) {
+void getBMEValues( char * tBuff ) {
 
   Serial.print("Temperature = ");
   // (23.69°C × 9/5) + 32
