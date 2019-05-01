@@ -129,26 +129,15 @@ bool jsonLoad() {
     Serial.println(F("Failed to read file, using default configuration"));
   Serial.println("Deserialized.");
 
-  intensity = (doc["intensity"].as<String>()) != NULL ? doc["intensity"].as<String>() : "0";
-  strcpy(auto_brightness, doc["auto_brightness"].as<char*>() );
-  ledStrip_intensity = doc["ledStrip_intensity"].as<String>(); // "10"
-  sColor = doc["sColor"].as<String>(); // "Purple"
-  strcpy( display_day_night_control, doc["display_day_night_control"].as<char*>() ); // "Off"
-  display_day_night_state = doc["display_day_night_state"].as<bool>();
-  display_off_hour = doc["display_off_hour"].as<String>(); // "23"
-  display_on_hour = doc["display_on_hour"].as<String>(); // "6"  
-  strcpy( display_control, (doc["display_control"].as<char*>() != NULL) ? doc["display_control"].as<char*>() : "On"); // "On"
-
-  // is the display master on or off - manual control context
-  // is the day/night on or off and what is the window  -  day/night context
-  // we don't care if we were in the middle of a temp-on for reboot, it doesn't persist.  The exception to that is a day/night
-  // window can't easily be calculated when we boot.  So we'll need a third off switch for that context
-  // Lastly there's the concept of control-state and current-state.  
-  // I want the display off  display_control[On|Off], but a button was pressed  temp_display_state[On|!On]
-  // I want the display off during a day/night window display_day_night_control[On|Off], display_off_hour[0-23], display_off_hour[0-23], 
-  //       but we're not in that window right now   not sure I need to track a state for this, it's calculated
-  // I want the display off for day/night   (same as above), but during boot I can't calculate the window    display_state[On|Off]
-   
+  intensity = (doc["intensity"].isNull()) ? "0" : doc["intensity"].as<String>();
+  strcpy(auto_brightness, (doc["auto_brightness"].isNull()) ? "On" : doc["auto_brightness"].as<char*>() );
+  ledStrip_intensity = (doc["ledStrip_intensity"].isNull()) ? "10" : doc["ledStrip_intensity"].as<String>(); // "10"
+  sColor = (doc["sColor"].isNull()) ? "Purple" : doc["sColor"].as<String>(); // "Purple"
+  strcpy( display_day_night_control, (doc["display_day_night_control"].isNull()) ? "Off" : doc["display_day_night_control"].as<char*>() ); // "Off"
+  display_day_night_state = (doc["display_day_night_state"].isNull()) ? false : doc["display_day_night_state"].as<bool>();
+  display_off_hour = (doc["display_off_hour"].isNull()) ? "23" : doc["display_off_hour"].as<String>(); // "23"
+  display_on_hour = (doc["display_on_hour"].isNull()) ? "6" : doc["display_on_hour"].as<String>(); // "6"  
+  strcpy( display_control, (doc["display_control"].isNull()) ? "On" : doc["display_control"].as<char*>()); // "On"
 
   Serial.println("Loaded config file");
   Serial.print("intensity: "); Serial.println( intensity );
@@ -627,12 +616,13 @@ void setup() {
   Serial.println(" *****");
   Serial.println( compile_date );
 
+
   Serial.println("---------- Loading config file from SPIFFS -----------");
   if (!SPIFFS.begin()) {
     Serial.println("Failed to mount file system");
     return;
   }
-  
+
   if ( !jsonLoad() ) {
     Serial.println("We couldn't load existing, create a new one in SETUP");
     if ( !jsonSave() )               //  We couldn't load existing, create a new one
