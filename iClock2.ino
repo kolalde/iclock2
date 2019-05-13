@@ -218,23 +218,46 @@ bool display_off_hours() {
   struct tm * timeinfo;
   time(&now);
   timeinfo = localtime(&now);
+  int off_window_length = 0;
+  int current_window_length = 0;
   
 //  Serial.println("display_off_hour: " + display_off_hour);
 //  Serial.println("display_on_hour: " + display_on_hour);
 //  Serial.print("display_day_night_off: "); Serial.println(display_day_night_off);
 //  Serial.print("Curent hour: " ); Serial.println(timeinfo->tm_hour);
 
+//
+//  // We know they want the day/night control
+//  if ( timeinfo->tm_hour == display_off_hour.toInt() )      //  and we're AT the off time
+//    return true;
+//
+//  if ( timeinfo->tm_hour == display_on_hour.toInt() )        // and we're AT the On time  
+//    return false;
+//
+//  return display_day_night_state;         // either inside or outside the edges, just return current state
+
+  // Calculate the window of 'off' time.  If we're currently in that window
+  // return true (and the control is On).
+
   if ( strcmp( display_day_night_control, "On" ) != 0 )     // Make it easy, the control isn't set
     return false;
 
-  // We know they want the day/night control
-  if ( timeinfo->tm_hour == display_off_hour.toInt() )      //  and we're AT the off time
+  // if the on-off time crosses the midnight boundry (a negative number), 
+  // reduce by 24 hours.  For example:   
+  // off-1am,  on-6am is 5 hours  (actually 4:59 minutes, we want it on at the start of 5am)
+  // off-23pm, on-6am is 7 hours
+  off_window_length = display_on_hour.toInt()-1 - display_off_hour.toInt();
+  if ( off_window_length < 0 )
+    off_window_length += 24;
+
+  current_window_length = display_on_hour.toInt()-1 - timeinfo->tm_hour;
+  if ( current_window_length < 0 ) 
+    current_window_length += 24;
+
+  if ( current_window_length <= off_window_length )    // we are within the 'off' window
     return true;
 
-  if ( timeinfo->tm_hour == display_on_hour.toInt() )        // and we're AT the On time  
-    return false;
-
-  return display_day_night_state;         // either inside or outside the edges, just return current state
+  return false;
 }
 
 
@@ -812,7 +835,8 @@ void loop()
 
     //
     // First calc to see if we're within the day/night/off window
-    //
+    //   Then adjust the state if needed, and if needed push the config so we're consistent
+    //   at boot time.
     if ( display_off_hours() ) {
       // Did we just transition into the On state
       if ( display_day_night_state == false ) {      
@@ -841,19 +865,26 @@ void loop()
     //
     if ( tv.tv_sec % tempPubInterval == 0 )
     {
+      // Get and internally publish the temp info
       getBMEValues( timeBuf );             // Get BME stats
 #if USE_MQTT      
       client.publish(tempTopic, timeBuf);
 #endif      
-      strcat( timeBuf, "^F" );
-      if (isDisplayOn()) printString(timeBuf);           // reuse the timeBuf to print the Temp
-      printTempFlag = true;
-      displayTempTicker.attach( 3, printTempCountDown );
+//      strcat( timeBuf, "^F" );
+//      if (isDisplayOn()) printString(timeBuf);           // reuse the timeBuf to print the Temp
+//      printTempFlag = true;
+//      displayTempTicker.attach( 3, printTempCountDown );
 
       //
       //   Push to ThingSpeak if we're NOT getting OWM
       //
       if ( !getOWMNow ) {
+        // Print the Temp for at leasst 3 seconds
+        strcat( timeBuf, "^F" );
+        if (isDisplayOn()) printString(timeBuf);           // reuse the timeBuf to print the Temp
+        printTempFlag = true;
+        displayTempTicker.attach( 3, printTempCountDown );        
+        
         // Write to ThingSpeak. There are up to 8 fields in a channel, allowing you to store up to 8 different
         // pieces of information in a channel.  Here, we write to field 1.
         int x = ThingSpeak.writeField(TSChannelID, 1, timeBuf, TSWriteApiKey);
