@@ -56,10 +56,12 @@ WiFiClient  tsClient;
 String displayText = "Enter text here";
 int displayTextTimes = 0;
 String textOn = "time";
-String intensity = "0";
+String intensityLevel = "Auto";
 String ledStrip_intensity = "10";
 String sColor = "Purple";
-char auto_brightness[5] = "On";
+int lowLightThresh = 900;
+int midLightThresh = 600;
+int hiLightThresh = 400;
 
 												// All 'controls' are persisted  (and display_day_night_state, for boot)
 char display_control[5] = "On";                          // is the control checked or not
@@ -93,7 +95,6 @@ char bootTime[30];
 /*
 {
   "intensity":"0",
-  "auto_brightness": "On",
   "ledStrip_intensity": "10",
   "sColor": "Purple",
   "display_day_night_control":"Off",
@@ -129,8 +130,7 @@ bool jsonLoad() {
     Serial.println(F("Failed to read file, using default configuration"));
   Serial.println("Deserialized.");
 
-  intensity = (doc["intensity"].isNull()) ? "0" : doc["intensity"].as<String>();
-  strcpy(auto_brightness, (doc["auto_brightness"].isNull()) ? "On" : doc["auto_brightness"].as<char*>() );
+  intensityLevel = (doc["intensityLevel"].isNull()) ? "Auto" : doc["intensityLevel"].as<String>();
   ledStrip_intensity = (doc["ledStrip_intensity"].isNull()) ? "10" : doc["ledStrip_intensity"].as<String>(); // "10"
   sColor = (doc["sColor"].isNull()) ? "Purple" : doc["sColor"].as<String>(); // "Purple"
   strcpy( display_day_night_control, (doc["display_day_night_control"].isNull()) ? "Off" : doc["display_day_night_control"].as<char*>() ); // "Off"
@@ -140,8 +140,7 @@ bool jsonLoad() {
   strcpy( display_control, (doc["display_control"].isNull()) ? "On" : doc["display_control"].as<char*>()); // "On"
 
   Serial.println("Loaded config file");
-  Serial.print("intensity: "); Serial.println( intensity );
-  Serial.print("auto_brightness: "); Serial.println( auto_brightness );
+  Serial.print("intensityLevel: "); Serial.println( intensityLevel );
   Serial.print("ledStrip_intensity: "); Serial.println( ledStrip_intensity );
   Serial.print("sColor: "); Serial.println( sColor );
   Serial.print("display_day_night_control: "); Serial.println( display_day_night_control );
@@ -159,8 +158,7 @@ bool jsonSave() {
   const size_t capacity = JSON_OBJECT_SIZE(10) + 230;
   DynamicJsonDocument doc(capacity);
   
-  doc["intensity"] = intensity;
-  doc["auto_brightness"] = (const char*)auto_brightness;
+  doc["intensityLevel"] = intensityLevel;
   doc["ledStrip_intensity"] = ledStrip_intensity;
   doc["sColor"] = sColor;
   doc["display_control"] = (const char*)display_control;
@@ -177,8 +175,7 @@ bool jsonSave() {
   }
 
   Serial.println("\nWriting to config file");
-  Serial.print("intensity: "); Serial.println( doc["intensity"].as<String>() );
-  Serial.print("auto_brightness: "); Serial.println( (const char*)doc["auto_brightness"] );
+  Serial.print("intensityLevel: "); Serial.println( doc["intensityLevel"].as<String>() );
   Serial.print("ledStrip_intensity: "); Serial.println( doc["ledStrip_intensity"].as<String>() );
   Serial.print("sColor: "); Serial.println( doc["sColor"].as<String>() );
   Serial.print("display_control: "); Serial.println( (const char*)doc["display_control"] );
@@ -282,6 +279,10 @@ bool displayWeatherButton() {
 
 const int mprLED = 10;          // I'd be nice to be able to use this for ESP8266httpUpdate
 const int mprButton = 11;
+const int mprMod1Control = 9;
+const int mprMod2Control = 8;
+const int mprMod3Control = 7;
+const int mprMod4Control = 6;
 const int mprSense  = 0;
 
 void setupMPR121() {
@@ -316,7 +317,8 @@ void setupMPR121() {
         Serial.println("unknown error");
         break;      
     }
-    //while(1);    REPLACE WITH???
+    Serial.println("MPR121 ERROR.  TRYING TO REBOOT OUT OF IT!!");  
+    ESP.reset();    
   }
   Serial.println("Back from MPR121.begin");  
   
@@ -331,7 +333,7 @@ void setupMPR121() {
   // See p.20 of http://www.nxp.com/docs/en/data-sheet/MPR121.pdf
   // for more details.
   
-  MPR121.setNumDigPins(2);
+  MPR121.setNumDigPins(7);
   
   // Note that each electrode has 7 possible pin modes (6 GPIO and 1 touch)
   // these are INPUT, INPUT_PULLUP (input with internal pullup), INPUT_PULLDOWN 
@@ -343,7 +345,7 @@ void setupMPR121() {
   
   MPR121.pinMode(mprLED, OUTPUT);
   MPR121.pinMode(mprButton, INPUT_PULLUP);
-  
+
 //  MPR121.setInterruptPin(0);
 
   // this is the touch threshold - setting it low makes it more like a proximity trigger
@@ -358,6 +360,37 @@ void setupMPR121() {
   MPR121.updateTouchData();
 
 }
+
+//
+//  Enable all the resistors for the MAX7219 rSets
+//  
+void lowMAX7219() {
+  // MAX7219 module controls.
+  // Each module has rset connected to a 51K resister, to a MPR121 electrode.
+  // Setting each electrode to INPUT_PULLUP is for low brightness, OUTPUT/HIGH for bright
+  MPR121.pinMode(mprMod1Control, INPUT_PULLUP);
+  MPR121.pinMode(mprMod2Control, INPUT_PULLUP);
+  MPR121.pinMode(mprMod3Control, INPUT_PULLUP);
+  MPR121.pinMode(mprMod4Control, INPUT_PULLUP);
+}  
+
+
+//
+//  Disable some of the resistors for the MAX7219 rSets
+//  
+void hiMAX7219() {
+  // MAX7219 module controls.
+  // Each module has rset connected to a 51K resister, to a MPR121 electrode.
+  // Setting each electrode to OUTPUT/HIGH is for high brightness, INPUT_PULLUP for low
+  MPR121.pinMode(mprMod1Control, OUTPUT);
+  MPR121.pinMode(mprMod2Control, OUTPUT);
+  MPR121.pinMode(mprMod3Control, OUTPUT);
+  MPR121.pinMode(mprMod4Control, OUTPUT);
+  MPR121.digitalWrite(mprMod1Control, 1);
+  MPR121.digitalWrite(mprMod2Control, 1);
+  MPR121.digitalWrite(mprMod3Control, 1);
+  MPR121.digitalWrite(mprMod4Control, 1);
+}  
 
 
 ////////////////////////////////////////////////////////
@@ -563,27 +596,51 @@ void time_is_set (void)
 #define sensorPin     A0    // select the input pin for ldr
 #define lightThresh   600
 int sensorValue = 0;        // variable to store the value coming from the sensor
-static int oldIsLight = 0;
 
-bool isLight() {
+enum LightLevel {Low, Medium, High};
+enum LightLevel ldrLevel;
+enum intensitySetting {Dim = 0, Bright = 6, Brightest = 30};
+enum intensitySetting currentIntensity = Dim;
+int currLightLevel = Low;
+//
+//  Return the current light level based on thresholds and hysteresis
+//
+int setLightLevel() {
+
   // read the value from the sensor:
   sensorValue = analogRead(sensorPin);
 //  Serial.println(sensorValue); //prints the values coming from the sensor on the screen
 
-  if (sensorValue < lightThresh - 80)       //setting a threshold value
+  // Is it very bright in the room?
+  if ( (currLightLevel != High) && (sensorValue <= hiLightThresh - .10*hiLightThresh) )
   {
-//    Serial.println("It is light");
-    oldIsLight = 15;
-    return true;
-  }
-  if (sensorValue > lightThresh + 80)       //setting a threshold value
-  {
-//    Serial.println("It is dark");
-    oldIsLight = 0;
-    return false;
+//    Serial.println("It is very bright");
+    setMAX7219Brightness( String("High") );
+    currLightLevel = High;
+    return High;
   }
 
-  return (oldIsLight == 15) ? true : false;
+  // Is it somewhat bright in the room
+  if ( (currLightLevel != Medium) && (sensorValue <= midLightThresh - .10*midLightThresh) &&
+       (sensorValue > hiLightThresh + .10*hiLightThresh) )
+  {
+//    Serial.println("It is somewhat bright");
+    setMAX7219Brightness( String("Medium") );
+    currLightLevel = Medium;
+    return Medium;
+  }
+
+  // Is it somewhat dark in the room
+  if ( (currLightLevel != Low) && (sensorValue >= lowLightThresh) &&
+     (sensorValue > midLightThresh + .10*midLightThresh) )
+  {
+//    Serial.println("It is not bright");
+    // It is mostly dark in the room
+    setMAX7219Brightness( String("Low") );
+    currLightLevel = Low;
+  }
+
+  return currLightLevel;
 }
 
 
@@ -651,6 +708,11 @@ void setup() {
     if ( !jsonSave() )               //  We couldn't load existing, create a new one
       Serial.println("We couldn't save a new config file in SETUP");
   }
+  
+  Serial.println("--------------------- MPR ---------------------");
+//  if (isDisplayOn()) printString( (char*) F("MPR") );
+  delay( 200 );
+  setupMPR121();
   
   Serial.println("---------- Init and clear the MAX7219 -----------");
   initMDLib();
@@ -738,11 +800,6 @@ void setup() {
       ESP.reset();
   }
 
-  Serial.println("--------------------- MPR ---------------------");
-  if (isDisplayOn()) printString( (char*) F("MPR") );
-  delay( 200 );
-  setupMPR121();
-  
   // Grab and stash the bootTime   what's really needed here?
   gettimeofday(&tv, &tz);
   clock_gettime(0, &tp); // also supported by esp8266 code
@@ -788,11 +845,8 @@ void loop()
   //
   // Adjust display for brightness
   //
-  if ( strcmp(auto_brightness, "On") == 0 ) {
-    if ( isLight()  == true )
-      mx->control(MD_MAX72XX::INTENSITY, 15);
-    if ( isLight() == false )
-      mx->control(MD_MAX72XX::INTENSITY, 0);
+  if ( intensityLevel.equals("Auto") ) {
+    setLightLevel();
   }
       
 #if USE_GPIO0
@@ -902,6 +956,7 @@ void loop()
       }
     }
     Serial.printf("heap size: %u\n", ESP.getFreeHeap());
+    Serial.printf( "LDR: %d\n", analogRead(sensorPin) );
   }
 
 #if USE_MQTT
@@ -927,18 +982,21 @@ void loop()
 
 
 bool isDisplayOn() {
-  if ( temp_display_state_on )
+  if ( temp_display_state_on ) {
     return true;                              // we're overriding to On for now
+  }
 
-  if ( display_day_night_state )                 // we're overriding to Off for boot
+  if ( display_day_night_state ) {                 // we're overriding to Off for boot
     return false;
+  }
     
   if ( strcmp(display_control, "On") != 0 ) {      // they want the display off
     return false;
   }
 
-  if ( display_off_hours() ) 
+  if ( display_off_hours() ) {
     return false;                      // we're in the night off hours, and they've enabled that control
+  }
     
   return true;
 }
@@ -947,8 +1005,28 @@ void initMDLib()
 {
   mx->begin();
   // module initialize
-  mx->control(MD_MAX72XX::INTENSITY, (byte)intensity.toInt() ); // dot matix intensity 0-15
   mx->setFont( _sys_var_single );
+  setMAX7219Brightness( intensityLevel );
+}
+
+
+
+void setMAX7219Brightness( String intensity ) {
+  if ( intensity.equals("High") ) {      // We want upper bright range
+    hiMAX7219();
+    mx->control(MD_MAX72XX::INTENSITY, Brightest - 15 ); // dot matix intensity 0-15  
+    //Serial.println("High bright");
+  }
+  if ( intensity.equals("Medium") ) {      // We want upper lower range
+    lowMAX7219();
+    mx->control(MD_MAX72XX::INTENSITY, Bright ); // dot matix intensity 0-15  
+    //Serial.println("Medium bright");
+  }
+  if ( intensity.equals("Low") || intensity.equals("Auto") ) {      // We want upper lower range
+    lowMAX7219();
+    mx->control(MD_MAX72XX::INTENSITY, Dim ); // dot matix intensity 0-15
+    //Serial.println("Low bright");
+  }
 }
 
 
@@ -1149,17 +1227,9 @@ void handle_msg()  {
     textOn = "time";
   Serial.print("textOn: "); Serial.println(textOn);
 
-  intensity = wServer.arg("intensity");
-  if ( intensity.length() == 0 ) {
-    intensity = "0";
-  }
-  byte bIntensity = (byte)intensity.toInt();
-  oldIsLight = (int) bIntensity;
-  mx->control(MD_MAX72XX::INTENSITY, bIntensity);
-  Serial.print("intensity: "); Serial.println(intensity);
-
-  strcpy( auto_brightness, wServer.arg("auto_brightness").c_str() );
-  Serial.print("auto_brightness: "); Serial.println(auto_brightness);
+  intensityLevel = wServer.arg("intensityLevel");
+  setMAX7219Brightness( intensityLevel );
+  Serial.print("intensity: "); Serial.println(intensityLevel);
 
   strcpy( display_control, wServer.arg("display_control").c_str() );
   Serial.print("display_control: "); Serial.println(display_control);
@@ -1211,12 +1281,15 @@ String setForm( ) {
     "<input type='radio' name='textOn' value='time'" +
     (textOn.equals("time") ? "checked='checked'" : "") + ">Display Time<br>"
     "<br>"
-    "Set display intensity (0-15)"
-    "<input type='text' name='intensity' size=3 value=" + intensity + "><br>"
-    "Enable auto_brightness control"
-    "<input type='checkbox' name='auto_brightness' size=3 value='On'" +
-    (strcmp(auto_brightness, "On") == 0 ? "checked" : "")  + "><br>"
-    "<br>"
+    "Set display intensity"
+    "<select name=intensityLevel>"
+    "<option selected='selected'>" + intensityLevel + "</option>"
+    "<option value='Auto'>Auto</option>"
+    "<option value='Low'>Low</option>"
+    "<option value='Medium'>Medium</option>"
+    "<option value='High'>High</option>"
+    "</select><br>"
+
     "Display On-checked or Off-not checked"
     "<input type='checkbox' name='display_control' size=3 value='On'" +
     (strcmp(display_control, "On") == 0 ? "checked" : "")  + "><br>"
