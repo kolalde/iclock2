@@ -62,9 +62,9 @@ String sColor = "Purple";
 int lowLightThresh = 900;
 int midLightThresh = 600;
 int hiLightThresh = 400;
-
 												// All 'controls' are persisted  (and display_day_night_state, for boot)
 char display_control[5] = "On";                          // is the control checked or not
+char display_temp_control[5] = "Off";               // is the control checked or not, for interval temp display
 char display_day_night_control[5] = "Off";               // is the control checked or not
 bool display_day_night_state = false;                    // are we in the day/night/Off state?
                                                          //    needed since we can't calc day_night at boot
@@ -102,10 +102,11 @@ char bootTime[30];
   "temp_display_state_on":false,
   "display_off_hour":"23",
   "display_on_hour":"6",
-  "display_control":"O"
+  "display_control":"O",
+  "display_temp_control":"Off"
 }
 */
-// Use arduinojson.org/assistant to compute the capacity.
+// Use https://arduinojson.org/v6/assistant/ to compute the capacity.
 bool jsonLoad() {
   
   File configFile = SPIFFS.open("config.json", "r");
@@ -138,6 +139,7 @@ bool jsonLoad() {
   display_off_hour = (doc["display_off_hour"].isNull()) ? "23" : doc["display_off_hour"].as<String>(); // "23"
   display_on_hour = (doc["display_on_hour"].isNull()) ? "6" : doc["display_on_hour"].as<String>(); // "6"  
   strcpy( display_control, (doc["display_control"].isNull()) ? "On" : doc["display_control"].as<char*>()); // "On"
+  strcpy( display_temp_control, (doc["display_temp_control"].isNull()) ? "Off" : doc["display_temp_control"].as<char*>()); // "Off"
 
   Serial.println("Loaded config file");
   Serial.print("intensityLevel: "); Serial.println( intensityLevel );
@@ -148,6 +150,7 @@ bool jsonLoad() {
   Serial.print("display_off_hour: "); Serial.println( display_off_hour );
   Serial.print("display_on_hour: "); Serial.println( display_on_hour );
   Serial.print("display_control: "); Serial.println( display_control );
+  Serial.print("display_temp_control: "); Serial.println( display_temp_control );
 
   configFile.close();
   return true;
@@ -167,6 +170,7 @@ bool jsonSave() {
   doc["display_off_hour"] = display_off_hour;
   doc["display_on_hour"] = display_on_hour;
   doc["display_control"] = (const char*)display_control;
+  doc["display_temp_control"] = (const char*)display_temp_control;
 
   File configFile = SPIFFS.open("config.json", "w");
   if (!configFile) {
@@ -179,6 +183,7 @@ bool jsonSave() {
   Serial.print("ledStrip_intensity: "); Serial.println( doc["ledStrip_intensity"].as<String>() );
   Serial.print("sColor: "); Serial.println( doc["sColor"].as<String>() );
   Serial.print("display_control: "); Serial.println( (const char*)doc["display_control"] );
+  Serial.print("display_temp_control: "); Serial.println( (const char*)doc["display_temp_control"] );
   Serial.print("display_day_night_control: "); Serial.println( (const char*)doc["display_day_night_control"] );
   Serial.print("display_day_night_state: "); Serial.println( doc["display_day_night_state"].as<bool>() );
   Serial.print("display_off_hour: "); Serial.println( (const char*)doc["display_off_hour"] );
@@ -283,6 +288,7 @@ const int mprMod1Control = 9;
 const int mprMod2Control = 8;
 const int mprMod3Control = 7;
 const int mprMod4Control = 6;
+const int mprAlarmControl = 5;
 const int mprSense  = 0;
 
 void setupMPR121() {
@@ -345,6 +351,7 @@ void setupMPR121() {
   
   MPR121.pinMode(mprLED, OUTPUT);
   MPR121.pinMode(mprButton, INPUT_PULLUP);
+  MPR121.pinMode(mprAlarmControl, OUTPUT);
 
 //  MPR121.setInterruptPin(0);
 
@@ -611,8 +618,8 @@ int setLightLevel() {
   sensorValue = analogRead(sensorPin);
 //  Serial.println(sensorValue); //prints the values coming from the sensor on the screen
 
-  // Is it very bright in the room?
-  if ( (currLightLevel != High) && (sensorValue <= hiLightThresh - .10*hiLightThresh) )
+  // Should we transition to High?
+  if ( (currLightLevel != High) && (sensorValue < hiLightThresh - .02*hiLightThresh) )
   {
 //    Serial.println("It is very bright");
     setMAX7219Brightness( String("High") );
@@ -620,9 +627,10 @@ int setLightLevel() {
     return High;
   }
 
-  // Is it somewhat bright in the room
-  if ( (currLightLevel != Medium) && (sensorValue <= midLightThresh - .10*midLightThresh) &&
-       (sensorValue > hiLightThresh + .10*hiLightThresh) )
+  // Should we transition to Medium?
+  // From High
+  if ( (currLightLevel == High) && (sensorValue > hiLightThresh + .02*hiLightThresh) || 
+       (currLightLevel == Low) && (sensorValue < lowLightThresh - .05*lowLightThresh) )
   {
 //    Serial.println("It is somewhat bright");
     setMAX7219Brightness( String("Medium") );
@@ -630,9 +638,8 @@ int setLightLevel() {
     return Medium;
   }
 
-  // Is it somewhat dark in the room
-  if ( (currLightLevel != Low) && (sensorValue >= lowLightThresh) &&
-     (sensorValue > midLightThresh + .10*midLightThresh) )
+  // Should we transition to Low
+  if ( (currLightLevel != Low) && (sensorValue > lowLightThresh + .05*lowLightThresh) )
   {
 //    Serial.println("It is not bright");
     // It is mostly dark in the room
@@ -867,12 +874,15 @@ void loop()
 
   MPR121.updateTouchData();
   if ( MPR121.isNewTouch(mprSense) == 1 ) {             // always display on button press
+    MPR121.digitalWrite(mprAlarmControl, HIGH);
     Serial.print( "TOUCHED!!  " ); Serial.print( "MPR121.isNewTouch(mprSense): " ); 
     Serial.println( MPR121.isNewTouch(mprSense) );
     setRandomColor();
 
     temp_display_state_on = true;                               // allow for displaying things
-    displayOffTicker.attach( 30, displayOffCountDown );         //   then revert in 30 seconds    
+    displayOffTicker.attach( 30, displayOffCountDown );         //   then revert in 30 seconds   
+    delay(10); 
+    MPR121.digitalWrite(mprAlarmControl, LOW);
   }
 #endif
 
@@ -924,21 +934,18 @@ void loop()
 #if USE_MQTT      
       client.publish(tempTopic, timeBuf);
 #endif      
-//      strcat( timeBuf, "^F" );
-//      if (isDisplayOn()) printString(timeBuf);           // reuse the timeBuf to print the Temp
-//      printTempFlag = true;
-//      displayTempTicker.attach( 3, printTempCountDown );
 
       //
       //   Push to ThingSpeak if we're NOT getting OWM
       //
       if ( !getOWMNow ) {
-        // Print the Temp for at leasst 3 seconds
-        strcat( timeBuf, "^F" );
-        if (isDisplayOn()) printString(timeBuf);           // reuse the timeBuf to print the Temp
-        printTempFlag = true;
-        displayTempTicker.attach( 3, printTempCountDown );        
-        
+        if ( strcmp( display_temp_control, "On" ) == 0 ) {       // Display the temp only if set
+          // Print the Temp for at leasst 3 seconds
+          strcat( timeBuf, "^F" );
+          if (isDisplayOn()) printString(timeBuf);           // reuse the timeBuf to print the Temp
+          printTempFlag = true;
+          displayTempTicker.attach( 3, printTempCountDown );        
+        }
         // Write to ThingSpeak. There are up to 8 fields in a channel, allowing you to store up to 8 different
         // pieces of information in a channel.  Here, we write to field 1.
         int x = ThingSpeak.writeField(TSChannelID, 1, timeBuf, TSWriteApiKey);
@@ -957,6 +964,7 @@ void loop()
     }
     Serial.printf("heap size: %u\n", ESP.getFreeHeap());
     Serial.printf( "LDR: %d\n", analogRead(sensorPin) );
+    Serial.printf( "currLightLevel: %d\n", currLightLevel );
   }
 
 #if USE_MQTT
@@ -1248,6 +1256,9 @@ void handle_msg()  {
     mx->clear();                         // Initial clear needed to well, clear
   }
 
+  strcpy( display_temp_control, wServer.arg("display_temp_control").c_str() );
+  Serial.print("display_temp_control: "); Serial.println(display_temp_control);
+
   ledStrip_intensity = wServer.arg("ledStrip_intensity");
   if ( ledStrip_intensity.length() == 0 ) {
     ledStrip_intensity = "10";
@@ -1281,6 +1292,11 @@ String setForm( ) {
     "<input type='radio' name='textOn' value='time'" +
     (textOn.equals("time") ? "checked='checked'" : "") + ">Display Time<br>"
     "<br>"
+
+    "Enable Display"
+    "<input type='checkbox' name='display_control' size=3 value='On'" +
+    (strcmp(display_control, "On") == 0 ? "checked" : "")  + "><br>"
+    
     "Set display intensity"
     "<select name=intensityLevel>"
     "<option selected='selected'>" + intensityLevel + "</option>"
@@ -1290,20 +1306,21 @@ String setForm( ) {
     "<option value='High'>High</option>"
     "</select><br>"
 
-    "Display On-checked or Off-not checked"
-    "<input type='checkbox' name='display_control' size=3 value='On'" +
-    (strcmp(display_control, "On") == 0 ? "checked" : "")  + "><br>"
-    
-    "Disable display after Hour (0-23)"
-    "<input type='text' name='display_off_hour' size=3 value='" + display_off_hour + "'><br>"
-    
-    "Enable display after Hour (0-23)"
-    "<input type='text' name='display_on_hour' size=3 value='" + display_on_hour + "'><br>"
-    
-    "Enable display ON/OFF for Day/Night"
+    "Enable Day/Night"
     "<input type='checkbox' name='display_day_night_control' size=3 value='On'" +
     (strcmp(display_day_night_control, "On") == 0 ? "checked" : "")  + "><br>"
+
+    "Turn on at Hour (0-23)"
+    "<input type='text' name='display_on_hour' size=3 value='" + display_on_hour + "'><br>"
+    
+    "Turn off at Hour (0-23)"
+    "<input type='text' name='display_off_hour' size=3 value='" + display_off_hour + "'><br>"
+    
+    "Enable Temperature display"
+    "<input type='checkbox' name='display_temp_control' size=3 value='On'" +
+    (strcmp(display_temp_control, "On") == 0 ? "checked" : "")  + "><br>"
     "<br>"
+
     "Set LED RGB color"
     "<select name=sColor>"
     "<option selected='selected'>" + sColor + "</option>"
